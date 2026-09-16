@@ -1,0 +1,64 @@
+[04-Jun-2026 12:47:12 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:68
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(68): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 68
+[04-Jun-2026 12:48:02 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:68
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(68): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 68
+[04-Jun-2026 12:48:03 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:68
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(68): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 68
+[04-Jun-2026 12:50:21 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:68
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(68): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 68
+[04-Jun-2026 12:59:03 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:82
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(82): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 82
+[04-Jun-2026 12:59:11 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:82
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(82): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 82
+[04-Jun-2026 12:59:12 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:82
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(82): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 82
+[04-Jun-2026 12:59:13 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:82
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(82): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'shk1234', 5.0, 10000.0, 'INV-0001', 50000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 82
+===== Request at 2026-06-05 04:16:53 =====
+[05-Jun-2026 04:16:53 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:82
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(82): mysqli_stmt->bind_param('sssdddssi', 'Schoenen Dis LL...', 'Laptop', 'SDL0001', 20.0, 10000.0, 'INV-0004', 200000.0, 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 82
+===== Request at 2026-06-05 04:18:33 =====
+[05-Jun-2026 04:18:33 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:122
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(122): mysqli_stmt->bind_param('dddssi', 37.0, 35.0, 10000.0, 'SDL0001', 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 122
+===== Request at 2026-06-05 04:19:25 =====
+[05-Jun-2026 04:19:25 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:122
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(122): mysqli_stmt->bind_param('dddssi', 37.0, 35.0, 10000.0, 'SDL0001', 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 122
+===== Request at 2026-06-05 04:19:39 =====
+[05-Jun-2026 04:19:39 Europe/Berlin] PHP Fatal error:  Uncaught ArgumentCountError: The number of elements in the type definition string must match the number of bind variables in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php:122
+Stack trace:
+#0 D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php(122): mysqli_stmt->bind_param('dddssi', 37.0, 35.0, 10000.0, 'SDL0001', 1)
+#1 {main}
+  thrown in D:\Work\Bip_Fencing\bip-fencing\backend\add_purchase_bill.php on line 122
