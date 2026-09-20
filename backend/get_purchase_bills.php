@@ -121,6 +121,18 @@ if (count($billIds) > 0) {
     foreach ($bills as &$b) {
         $b['payments']    = $b['payments'] ?? [];
         $b['branch_name'] = $branchNames[(int)$b['branch_id']] ?? null;
+
+        // Amounts shown on the bill card
+        $sub   = array_sum(array_map(fn($it) => (float)$it['amount'], $b['items']));
+        $gst   = (int)($b['gst_enabled'] ?? 0) === 1 ? $sub * (float)$b['gst_rate'] / 100 : 0.0;
+        $round = (float)($b['round_off'] ?? 0);
+        $b['round_off_mode'] = $b['round_off_mode'] ?? 'none';
+        $b['round_off']      = round($round, 2);
+        $b['subtotal']       = $b['subtotal']       ?? round($sub, 2);
+        $b['gst_amount']     = $b['gst_amount']     ?? round($gst, 2);
+        $b['final_amount']   = round($sub + $gst + $round, 2);   // bill payable after round off
+        $b['closing_balance'] = $b['closing_balance']
+            ?? round((float)$b['total_amount'] - (float)$b['paid_amount'], 2);
     }
     unset($b);
 }

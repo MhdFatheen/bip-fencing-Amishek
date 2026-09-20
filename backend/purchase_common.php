@@ -133,3 +133,41 @@ function pbEnsurePaymentsTable(mysqli $conn): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ");
 }
+
+// ── Round off ─────────────────────────────────────────────────
+// Adds purchase_bills.round_off_mode / round_off once (MySQL + MariaDB safe)
+function pbEnsureRoundOffColumns(mysqli $conn): void {
+    $cols = [
+        'round_off_mode' => "VARCHAR(10) NOT NULL DEFAULT 'none'",
+        'round_off'      => "DECIMAL(10,2) NOT NULL DEFAULT 0.00",
+    ];
+    foreach ($cols as $col => $def) {
+        $res = $conn->query("SHOW COLUMNS FROM purchase_bills LIKE '$col'");
+        if ($res && $res->num_rows === 0) {
+            $conn->query("ALTER TABLE purchase_bills ADD COLUMN $col $def");
+        }
+    }
+}
+
+// mode: 'auto'   → nearest whole rupee (server calculates)
+//       'manual' → amount typed by the user (+ or −)
+//       'none'   → no round off (old bills)
+// $billAmount = subtotal + GST (opening balance is NOT rounded)
+// Returns [mode, roundOff]
+function pbRoundOff(string $mode, $manualValue, float $billAmount): array {
+    $mode = in_array($mode, ['auto', 'manual', 'none'], true) ? $mode : 'none';
+    if ($mode === 'auto') {
+        return ['auto', round(round($billAmount) - $billAmount, 2)];
+    }
+    if ($mode === 'manual') {
+        if ($manualValue === '' || $manualValue === null || !is_numeric($manualValue)) {
+            pbRespond(400, ['message' => 'Enter a valid manual round off amount (e.g. 0.40 or -0.60)']);
+        }
+        $r = round((float)$manualValue, 2);
+        if ($billAmount + $r < 0) {
+            pbRespond(400, ['message' => 'Round off cannot make the bill amount negative']);
+        }
+        return ['manual', $r];
+    }
+    return ['none', 0.0];
+}

@@ -51,9 +51,17 @@ foreach ($items as $i => $it) {
     $clean[] = ['product_id' => $pid, 'product_name' => $name, 'quantity' => $qty, 'rate' => $rate, 'amount' => $amount];
 }
 $gst_amount   = $gst_enabled ? $subtotal * $gst_rate / 100 : 0.0;
-$total_amount = $subtotal + $gst_amount + $opening_balance;
+
+// Round off applies to the bill amount (subtotal + GST), not the opening balance
+[$round_off_mode, $round_off] = pbRoundOff(
+    (string)($data['round_off_mode'] ?? 'none'),
+    $data['round_off'] ?? null,
+    $subtotal + $gst_amount
+);
+$total_amount = round($subtotal + $gst_amount + $round_off + $opening_balance, 2);
 
 $conn = getDB();
+pbEnsureRoundOffColumns($conn);
 $bill = pbLoadBill($conn, $billId, $authUser);
 $branchId = (int)$bill['branch_id'];
 
@@ -79,12 +87,14 @@ try {
     $st = $conn->prepare(
         "UPDATE purchase_bills
             SET company_name=?, supplier_phone=?, invoice_no=?, bill_date=?, total_amount=?,
-                paid_amount=?, opening_balance=?, gst_enabled=?, gst_rate=?, notes=?, client_id=?
+                paid_amount=?, opening_balance=?, gst_enabled=?, gst_rate=?, notes=?, client_id=?,
+                round_off_mode=?, round_off=?
           WHERE id=?"
     );
-    $st->bind_param('ssssdddidsii',
+    $st->bind_param('ssssdddidsisdi',
         $company_name, $supplier_phone, $invoice_no, $bill_date, $total_amount,
-        $paid_amount, $opening_balance, $gst_enabled, $gst_rate, $notes, $client_id, $billId);
+        $paid_amount, $opening_balance, $gst_enabled, $gst_rate, $notes, $client_id,
+        $round_off_mode, $round_off, $billId);
     $st->execute();
     $st->close();
 
@@ -107,6 +117,7 @@ try {
         'bill_id'      => $billId,
         'client_id'    => $client_id,
         'total_amount' => round($total_amount, 2),
+        'round_off'    => $round_off,
     ]);
 } catch (Throwable $e) {
     $conn->rollback();

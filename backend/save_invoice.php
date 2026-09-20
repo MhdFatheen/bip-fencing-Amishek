@@ -46,13 +46,19 @@ if (empty($data['items']) || !is_array($data['items'])) {
 
 // ── Branch resolution ─────────────────────────────────────────
 //  Admin in "All Branches" mode → X-Branch-ID header → first item's branch
-if ($authUser['role'] === 'admin') {
+//  "All Branch" invoice (admin) → branch_id = NULL
+if ($authUser['role'] === 'admin' && !empty($data['all_branch'])) {
+    $branch_id = null;
+} elseif ($authUser['role'] === 'admin') {
     $branch_id = $authUser['view_branch_id'] ?? null;
     if (!$branch_id && !empty($_SERVER['HTTP_X_BRANCH_ID'])) {
         $branch_id = (int) $_SERVER['HTTP_X_BRANCH_ID'];
     }
-    if (!$branch_id && !empty($data['items'][0]['branch_id'])) {
-        $branch_id = (int) $data['items'][0]['branch_id'];
+    // first row that has a specific branch
+    if (!$branch_id) {
+        foreach ($data['items'] as $it) {
+            if (!empty($it['branch_id'])) { $branch_id = (int) $it['branch_id']; break; }
+        }
     }
 } else {
     $branch_id = $authUser['branch_id'] ?? null;
@@ -124,12 +130,12 @@ try {
     if ($buyer_phone) {
         // Match by phone within this branch, or an older row with no branch
         if ($branch_id === null) {
-            $cChk = $conn->prepare("SELECT id FROM clients WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone,''), '[^0-9]', ''), 10) = ? ORDER BY id ASC LIMIT 1");
+            $cChk = $conn->prepare("SELECT id FROM clients WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ? ORDER BY id ASC LIMIT 1");
             $cChk->bind_param('s', $buyer_phone);
         } else {
             $cChk = $conn->prepare("
                 SELECT id FROM clients
-                 WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone,''), '[^0-9]', ''), 10) = ? AND (branch_id = ? OR branch_id IS NULL)
+                 WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ? AND (branch_id = ? OR branch_id IS NULL)
                  ORDER BY (branch_id = ?) DESC, id ASC LIMIT 1
             ");
             $cChk->bind_param('sii', $buyer_phone, $branch_id, $branch_id);
@@ -273,7 +279,10 @@ try {
         $rate_incl = floatval($item['rateIncl'] ?? 0);
         $rate_excl = floatval($item['rateExcl'] ?? 0);
         $taxable   = floatval($item['taxableAmt'] ?? ($rate_excl * $qty));
-        $item_br   = !empty($item['branch_id']) ? (int) $item['branch_id'] : $branch_id;
+        // "All Branch" row (new Tax Invoice page sends branch_id = null) stays NULL
+        $item_br   = !empty($item['branch_id'])
+            ? (int) $item['branch_id']
+            : ($authUser['role'] === 'admin' && isset($data['all_branch']) && array_key_exists('branch_id', $item) ? null : $branch_id);
 
         if (!$desc || $qty <= 0) continue;
 

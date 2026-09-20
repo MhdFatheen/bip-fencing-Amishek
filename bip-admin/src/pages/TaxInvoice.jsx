@@ -117,8 +117,16 @@ const toISO = (txt) => {
   const m = txt.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   return m ? `${m[3]}-${m[2]}-${m[1]}` : "";
 };
+// "All Branch" row: the product can come from any branch.
+// The row's branchId is ALL_BRANCH; the product's own branch is kept in
+// productBranchId (used only for stock deduction). Saved as branch_id = NULL.
+const ALL_BRANCH = "all";
+const stockBranchOf = (p) =>
+  p.branchId === ALL_BRANCH ? p.productBranchId : p.branchId;
+
 const emptyProduct = () => ({
   branchId: null,
+  productBranchId: null,
   productId: null,
   desc: "",
   hsn: "",
@@ -211,7 +219,8 @@ const mapInvoiceToForm = (inv) => ({
 const mapItemsToProducts = (items) =>
   items && items.length
     ? items.map((it) => ({
-        branchId: it.branch_id ? Number(it.branch_id) : null,
+        branchId: it.branch_id ? Number(it.branch_id) : ALL_BRANCH,
+        productBranchId: null,
         productId: null,
         desc: it.description || "",
         hsn: it.hsn || "",
@@ -732,7 +741,9 @@ export default function TaxInvoice() {
       const updated = [...prev];
       updated[idx] = {
         ...updated[idx],
-        branchId: branchId ? Number(branchId) : null,
+        branchId:
+          branchId === ALL_BRANCH ? ALL_BRANCH : branchId ? Number(branchId) : null,
+        productBranchId: null,
         productId: null,
         desc: "",
         hsn: "",
@@ -747,7 +758,13 @@ export default function TaxInvoice() {
       handleProduct(idx, "desc", "");
       return;
     }
-    const branchId = products[idx]?.branchId;
+    // All Branch rows use "branchId:productId" as the option value
+    let branchId = products[idx]?.branchId;
+    if (branchId === ALL_BRANCH) {
+      const [bid, pid] = String(productId).split(":");
+      branchId = Number(bid);
+      productId = pid;
+    }
     const found = (productsByBranch[branchId] || []).find(
       (p) => String(p.id) === String(productId),
     );
@@ -766,6 +783,7 @@ export default function TaxInvoice() {
       updated[idx] = {
         ...updated[idx],
         productId: found.id,
+        productBranchId: branchId,
         desc: found.productName,
         rateIncl: found.sellingPrice || "",
         per: unitMap[found.unit] || found.unit || "NOS",
@@ -841,7 +859,7 @@ export default function TaxInvoice() {
         .filter((idx) => {
           const p = products[idx];
           const usedQty = parseFloat(p.qty);
-          return !p.stockDeducted && p.branchId && p.productId && usedQty && usedQty > 0;
+          return !p.stockDeducted && stockBranchOf(p) && p.productId && usedQty && usedQty > 0;
         });
 
       if (pendingIndexes.length === 0) {
@@ -849,7 +867,7 @@ export default function TaxInvoice() {
         return false;
       }
 
-      const branchIds = [...new Set(pendingIndexes.map((idx) => products[idx].branchId))];
+      const branchIds = [...new Set(pendingIndexes.map((idx) => stockBranchOf(products[idx])))];
 
       const dbProductsByBranch = {};
       for (const branchId of branchIds) {
@@ -862,7 +880,7 @@ export default function TaxInvoice() {
       for (const idx of pendingIndexes) {
         const invoiceItem = products[idx];
         const usedQty = parseFloat(invoiceItem.qty);
-        const match = (dbProductsByBranch[invoiceItem.branchId] || []).find(
+        const match = (dbProductsByBranch[stockBranchOf(invoiceItem)] || []).find(
           (p) => String(p.id) === String(invoiceItem.productId),
         );
         if (!match) continue;
@@ -877,7 +895,7 @@ export default function TaxInvoice() {
         const newStock = currentStock - usedQty;
         const updateRes = await apiFetch(`/products.php?id=${match.id}`, {
           method: "PUT",
-          branchId: invoiceItem.branchId,
+          branchId: stockBranchOf(invoiceItem),
           body: JSON.stringify({
             productName: match.product_name,
             hsn: match.hsn,
@@ -950,8 +968,14 @@ export default function TaxInvoice() {
     }
 
     await reduceStock();
+
+    // All rows "All Branch" → invoice saved with no branch (branch_id = NULL)
+    const allBranch = products.every((p) => p.branchId === ALL_BRANCH);
+    const firstSpecificBranch =
+      products.find((p) => p.branchId && p.branchId !== ALL_BRANCH)?.branchId;
     try {
       const payload = {
+        all_branch: allBranch,
         invoice_no: invoiceNoToUse,
         invoice_date: form.invoiceDate,
         copy_type: form.copyType,
@@ -994,7 +1018,7 @@ export default function TaxInvoice() {
         bank_ifsc: form.bankIfsc,
         bank_branch: form.bankBranch,
         items: rows.map((r) => ({
-          branch_id: r.branchId,
+          branch_id: r.branchId === ALL_BRANCH ? null : r.branchId,
           desc: r.desc,
           hsn: r.hsn,
           qty: r.qty,
@@ -1006,7 +1030,9 @@ export default function TaxInvoice() {
       };
       const res = await apiFetch("/save_invoice.php", {
         method: "POST",
-        branchId: branchInfo.branchId || products[0]?.branchId || undefined,
+        branchId: allBranch
+          ? ALL_BRANCH
+          : branchInfo.branchId || firstSpecificBranch || undefined,
         body: JSON.stringify(payload),
       });
       const result = await res.json();
@@ -1452,7 +1478,25 @@ export default function TaxInvoice() {
                     const ri = parseFloat(p.rateIncl) || 0;
                     const re = ri / (1 + gstRate / 100);
                     const ta = re * q;
-                    const branchProducts = productsByBranch[p.branchId] || [];
+                    const isAllBranch = p.branchId === ALL_BRANCH;
+                    const branchProducts = isAllBranch
+                      ? BRANCHES.flatMap((b) =>
+                          (productsByBranch[b.id] || []).map((sp) => ({
+                            ...sp,
+                            optionValue: `${b.id}:${sp.id}`,
+                            label: `${sp.productName} — ${b.name}`,
+                          })),
+                        )
+                      : (productsByBranch[p.branchId] || []).map((sp) => ({
+                          ...sp,
+                          optionValue: sp.id,
+                          label: sp.productName,
+                        }));
+                    const selectedValue = !p.productId
+                      ? ""
+                      : isAllBranch
+                        ? `${p.productBranchId}:${p.productId}`
+                        : p.productId;
                     return (
                       <tr key={i}>
                         <td style={{ textAlign: "center", color: "#94a3b8" }}>{i + 1}</td>
@@ -1463,6 +1507,7 @@ export default function TaxInvoice() {
                             onChange={(e) => handleBranchSelect(i, e.target.value)}
                           >
                             <option value="">— Branch —</option>
+                            <option value={ALL_BRANCH}>All Branch</option>
                             {BRANCHES.map((b) => (
                               <option key={b.id} value={b.id}>
                                 {b.name}
@@ -1477,15 +1522,15 @@ export default function TaxInvoice() {
                           {p.branchId ? (
                             <select
                               className={`at-select-t${errors[`desc_${i}`] ? " error-field" : ""}`}
-                              value={p.productId || ""}
+                              value={selectedValue}
                               onChange={(e) => handleProductSelect(i, e.target.value)}
                             >
                               <option value="">
                                 {!p.productId && p.desc ? p.desc : "— Select Product —"}
                               </option>
                               {branchProducts.map((sp) => (
-                                <option key={sp.id} value={sp.id}>
-                                  {sp.productName}
+                                <option key={sp.optionValue} value={sp.optionValue}>
+                                  {sp.label}
                                 </option>
                               ))}
                             </select>

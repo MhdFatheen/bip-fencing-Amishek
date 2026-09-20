@@ -92,9 +92,17 @@ foreach ($items as $idx => $item) {
 
 // GST on top of the item subtotal, then any opening balance carried forward
 $gst_amount   = $gst_enabled ? ($subtotal * $gst_rate / 100) : 0.0;
-$total_amount = $subtotal + $gst_amount + $opening_balance;
+
+// Round off applies to the bill amount (subtotal + GST), not the opening balance
+[$round_off_mode, $round_off] = pbRoundOff(
+    (string)($data['round_off_mode'] ?? 'none'),
+    $data['round_off'] ?? null,
+    $subtotal + $gst_amount
+);
+$total_amount = round($subtotal + $gst_amount + $round_off + $opening_balance, 2);
 
 $conn = getDB();
+pbEnsureRoundOffColumns($conn);
 $conn->begin_transaction();
 
 try {
@@ -104,13 +112,15 @@ try {
     $stmt = $conn->prepare(
         "INSERT INTO purchase_bills
             (company_name, supplier_phone, invoice_no, bill_date, total_amount,
-             paid_amount, opening_balance, gst_enabled, gst_rate, notes, branch_id, client_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             paid_amount, opening_balance, gst_enabled, gst_rate, notes, branch_id, client_id,
+             round_off_mode, round_off)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     $stmt->bind_param(
-        'ssssdddidsii',
+        'ssssdddidsiisd',
         $company_name, $supplier_phone, $invoice_no, $bill_date, $total_amount,
-        $paid_amount, $opening_balance, $gst_enabled, $gst_rate, $notes, $branchId, $client_id
+        $paid_amount, $opening_balance, $gst_enabled, $gst_rate, $notes, $branchId, $client_id,
+        $round_off_mode, $round_off
     );
     $stmt->execute();
     $billId = (int)$conn->insert_id;
@@ -175,6 +185,7 @@ try {
         'bill_id'      => $billId,
         'client_id'    => $client_id,
         'total_amount' => round($total_amount, 2),
+        'round_off'    => $round_off,
     ]);
 } catch (Exception $e) {
     $conn->rollback();

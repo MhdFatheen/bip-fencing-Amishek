@@ -18,10 +18,28 @@ const emptyForm = () => ({
   notes: "",
   gst_enabled: false,
   gst_rate: "18",
+  round_off_mode: "auto", // "none" | "auto" | "manual"
+  round_off: "", // manual round-off value (+ or −)
   opening_balance: "",
   paid_amount: "",
   items: [emptyItem()],
 });
+
+// 2-decimal rounding that avoids 0.1 + 0.2 style errors
+const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+// Signed rupee amount for round off: +₹0.40 / −₹0.60
+const signed = (n) =>
+  `${n > 0 ? "+" : n < 0 ? "−" : ""}₹${Math.abs(Number(n) || 0).toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+const ROUND_OFF_MODES = [
+  { value: "none", label: "Off" },
+  { value: "auto", label: "Auto" },
+  { value: "manual", label: "Manual" },
+];
 
 // Phone key used to identify the same party: last 10 digits only.
 const phoneKey = (p) => String(p || "").replace(/\D/g, "").slice(-10);
@@ -182,10 +200,26 @@ export default function PurchaseBill() {
   );
   const gstRate = form.gst_enabled ? parseFloat(form.gst_rate) || 0 : 0;
   const gstAmount = form.gst_enabled ? (subtotal * gstRate) / 100 : 0;
-  const totalAmount = subtotal + gstAmount;
+  // Bill amount before round off = subtotal + GST
+  const billAmount = r2(subtotal + gstAmount);
+
+  // Round off: Auto → nearest whole rupee, Manual → typed value (+/−)
+  const autoRoundOff = r2(Math.round(billAmount) - billAmount);
+  const manualRoundOffValid =
+    form.round_off !== "" && !isNaN(parseFloat(form.round_off));
+  const roundOff =
+    form.round_off_mode === "auto"
+      ? autoRoundOff
+      : form.round_off_mode === "manual" && manualRoundOffValid
+        ? r2(parseFloat(form.round_off))
+        : 0;
+
+  // Final payable for this bill (after round off)
+  const totalAmount = r2(billAmount + roundOff);
   const openingBalance = parseFloat(form.opening_balance) || 0;
   const paidAmount = parseFloat(form.paid_amount) || 0;
-  const closingBalance = openingBalance + totalAmount - paidAmount;
+  const closingBalance = r2(openingBalance + totalAmount - paidAmount);
+
 
   // ── Save (create or admin update) ─────────────────────────
   const handleSubmit = async (e) => {
@@ -206,6 +240,14 @@ export default function PurchaseBill() {
         return;
       }
     }
+    if (form.round_off_mode === "manual" && !manualRoundOffValid) {
+      setFormError("Enter the manual round off amount (e.g. 0.40 or -0.60)");
+      return;
+    }
+    if (totalAmount < 0) {
+      setFormError("Round off cannot make the bill amount negative");
+      return;
+    }
     if (form.gst_enabled && (gstRate < 0 || gstRate > 100)) {
       setFormError("GST rate must be between 0 and 100");
       return;
@@ -217,6 +259,8 @@ export default function PurchaseBill() {
       gst_rate: gstRate,
       opening_balance: openingBalance,
       paid_amount: paidAmount,
+      round_off_mode: form.round_off_mode,
+      round_off: roundOff,
     };
 
     const endpoint = editingId
@@ -269,6 +313,10 @@ export default function PurchaseBill() {
       notes: bill.notes || "",
       gst_enabled: Number(bill.gst_enabled) === 1,
       gst_rate: String(parseFloat(bill.gst_rate) || 18),
+      // Old bills (saved before round off existed) open with round off "Off"
+      round_off_mode: bill.round_off_mode || "none",
+      round_off:
+        bill.round_off_mode === "manual" ? String(parseFloat(bill.round_off) || 0) : "",
       opening_balance: String(parseFloat(bill.opening_balance) || ""),
       paid_amount: String(parseFloat(bill.paid_amount) || ""),
       items: (bill.items || []).map((it) => ({
@@ -655,6 +703,57 @@ export default function PurchaseBill() {
             )}
           </div>
 
+          {/* ── Round off ───────────────────────────────────── */}
+          <div className="at-subhead">
+            <i className="bi bi-calculator"></i> Round Off
+          </div>
+          <div className="pb-round-row">
+            <div className="pb-seg" role="radiogroup" aria-label="Round off mode">
+              {ROUND_OFF_MODES.map((m) => (
+                <button
+                  key={m.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={form.round_off_mode === m.value}
+                  className={`pb-seg-btn${form.round_off_mode === m.value ? " active" : ""}`}
+                  onClick={() => setForm({ ...form, round_off_mode: m.value })}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {form.round_off_mode === "auto" && (
+              <div className="pb-round-info">
+                {inr(billAmount.toFixed(2))} → <b>{inr(totalAmount.toFixed(2))}</b>
+                <span className="pb-round-tag">Round off {signed(autoRoundOff)}</span>
+              </div>
+            )}
+
+            {form.round_off_mode === "manual" && (
+              <div className="at-fg" style={{ minWidth: 200, margin: 0 }}>
+                <label className="at-label">Round Off Amount (₹)</label>
+                <input
+                  type="number"
+                  name="round_off"
+                  step="0.01"
+                  placeholder="e.g. 0.40 or -0.60"
+                  className="at-input"
+                  value={form.round_off}
+                  onChange={handleHeaderChange}
+                  onWheel={(e) => e.target.blur()}
+                />
+                <small style={{ color: "#6b7280", fontSize: 12 }}>
+                  Use − to reduce the amount. Auto would be {signed(autoRoundOff)}
+                </small>
+              </div>
+            )}
+
+            {form.round_off_mode === "none" && (
+              <div className="pb-round-info">No round off — exact amount is used.</div>
+            )}
+          </div>
+
           {/* ── Payment section ─────────────────────────────── */}
           <div className="at-subhead">
             <i className="bi bi-cash-stack"></i> Payment Details
@@ -708,8 +807,20 @@ export default function PurchaseBill() {
                 style={{ borderTop: "1px solid #e2e8f0", margin: "6px 0" }}
               ></div>
               <div>
-                Total Amount: <strong>{inr(totalAmount.toFixed(2))}</strong>
+                Total Amount: <strong>{inr(billAmount.toFixed(2))}</strong>
               </div>
+              {form.round_off_mode !== "none" && (
+                <div className="muted">
+                  Round Off ({form.round_off_mode === "auto" ? "Auto" : "Manual"}):{" "}
+                  {signed(roundOff)}
+                </div>
+              )}
+              <div className="net" style={{ color: "#1e293b", marginTop: 2 }}>
+                Final Payable: {inr(totalAmount.toFixed(2))}
+              </div>
+              <div
+                style={{ borderTop: "1px dashed #e2e8f0", margin: "6px 0" }}
+              ></div>
               <div className="muted">
                 Opening Balance: {inr(openingBalance.toFixed(2))}
               </div>
@@ -956,6 +1067,21 @@ export default function PurchaseBill() {
                               <b>{inr(bill.gst_amount)}</b>
                             </div>
                           )}
+                          {Number(bill.round_off) !== 0 && (
+                            <div className="pay-chip">
+                              <span>
+                                Round Off
+                                {bill.round_off_mode === "manual" ? " (M)" : " (A)"}
+                              </span>
+                              <b>{signed(Number(bill.round_off))}</b>
+                            </div>
+                          )}
+                          {bill.final_amount !== undefined && (
+                            <div className="pay-chip">
+                              <span>Bill Payable</span>
+                              <b>{inr(bill.final_amount)}</b>
+                            </div>
+                          )}
                           <div className="pay-chip">
                             <span>Total</span>
                             <b>{inr(bill.total_amount)}</b>
@@ -1178,6 +1304,14 @@ const screenStyles = `
   .at-totals-box { background: #f8fbff; border: 1.5px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; font-size: 13px; text-align: right; min-width: 280px; }
   .at-totals-box .muted { color: #64748b; font-size: 12px; margin-top: 2px; }
   .at-totals-box .net { font-size: 16px; font-weight: 800; margin-top: 6px; }
+  .pb-round-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 8px; }
+  .pb-seg { display: inline-flex; border: 1px solid #cbd5e1; border-radius: 10px; overflow: hidden; }
+  .pb-seg-btn { border: none; background: #fff; padding: 8px 18px; font-size: 13px; font-weight: 700; color: #475569; cursor: pointer; }
+  .pb-seg-btn + .pb-seg-btn { border-left: 1px solid #cbd5e1; }
+  .pb-seg-btn.active { background: #008b3e; color: #fff; }
+  .pb-seg-btn:focus-visible { outline: 2px solid #008b3e; outline-offset: -2px; }
+  .pb-round-info { font-size: 14px; color: #334155; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pb-round-tag { background: #ecfdf5; color: #047857; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 700; }
 
   .at-form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 
