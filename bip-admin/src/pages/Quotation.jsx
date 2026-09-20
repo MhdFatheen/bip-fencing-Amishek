@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/api";
+import { BRANCH_LABELS } from "../utils/branchNames";
 
 // ─── COMPANY & BANK DETAILS ──────────────────────────────────────────────────
 const COMPANY = {
@@ -380,6 +381,68 @@ export default function Quotation() {
     form.isGst ? form.taxPercent : 0,
     form.manualRoundOff,
   );
+
+  // ── Central customer database: phone is the key ─────────────
+  const [customerStatus, setCustomerStatus] = useState({ state: "", name: "" });
+  const [savingCustomer, setSavingCustomer] = useState(false);
+
+  const lookupCustomerByPhone = async (phone) => {
+    const key = String(phone || "").replace(/\D/g, "").slice(-10);
+    if (key.length !== 10) {
+      setCustomerStatus({ state: "", name: "" });
+      return;
+    }
+    try {
+      const res = await apiFetch(`/client.php?phone=${key}`);
+      const data = await res.json();
+      if (data.found && data.client) {
+        const c = data.client;
+        setForm((prev) => ({
+          ...prev,
+          clientName: c.name || prev.clientName,
+          clientAddress: c.address || prev.clientAddress,
+          clientGst: c.gst || prev.clientGst,
+          clientState: c.state || prev.clientState,
+          clientStateCode: c.state_code || prev.clientStateCode,
+          clientEmail: c.email || prev.clientEmail,
+        }));
+        setCustomerStatus({ state: "found", name: c.name || "" });
+      } else {
+        setCustomerStatus({ state: "new", name: "" });
+      }
+    } catch (_) {
+      setCustomerStatus({ state: "", name: "" });
+    }
+  };
+
+  const saveClientAsCustomer = async () => {
+    if (!form.clientName.trim()) {
+      alert("⚠️ Enter the customer name first.");
+      return;
+    }
+    setSavingCustomer(true);
+    try {
+      const res = await apiFetch("/client.php?action=save_customer", {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.clientName,
+          phone: form.clientPhone,
+          address: form.clientAddress,
+          gst: form.clientGst,
+          state: form.clientState,
+          state_code: form.clientStateCode,
+          email: form.clientEmail,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) setCustomerStatus({ state: "found", name: form.clientName });
+      else alert("⚠️ " + (data.message || "Could not save the customer."));
+    } catch (_) {
+      alert("⚠️ Server error while saving the customer.");
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
 
   const handleChange = (e) =>
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -1405,7 +1468,44 @@ export default function Quotation() {
               </div>
               <div className="at-fg">
                 <label className="at-label">Phone</label>
-                <input name="clientPhone" value={form.clientPhone} onChange={handleChange} className="at-input" />
+                <input
+                  name="clientPhone"
+                  value={form.clientPhone}
+                  onChange={(e) => {
+                    handleChange(e);
+                    const key = e.target.value.replace(/\D/g, "").slice(-10);
+                    if (key.length === 10) lookupCustomerByPhone(key);
+                    else setCustomerStatus({ state: "", name: "" });
+                  }}
+                  onBlur={(e) => lookupCustomerByPhone(e.target.value)}
+                  className="at-input"
+                />
+                {customerStatus.state === "found" && (
+                  <small style={{ color: "#008b3e", fontSize: 12, fontWeight: 600 }}>
+                    <i className="bi bi-check-circle"></i> Saved customer
+                    {customerStatus.name ? `: ${customerStatus.name}` : ""}
+                  </small>
+                )}
+                {customerStatus.state === "new" && (
+                  <small style={{ color: "#6b7280", fontSize: 12 }}>
+                    New number —{" "}
+                    <button
+                      type="button"
+                      onClick={saveClientAsCustomer}
+                      disabled={savingCustomer}
+                      style={{
+                        border: "none",
+                        background: "none",
+                        padding: 0,
+                        color: "#008b3e",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {savingCustomer ? "saving…" : "save as customer"}
+                    </button>
+                  </small>
+                )}
               </div>
               <div className="at-fg">
                 <label className="at-label">Email</label>
@@ -1685,7 +1785,7 @@ export default function Quotation() {
 }
 
 // ─── ITEM ROW ────────────────────────────────────────────────────────────────
-const BRANCH_NAMES = { 1: "Branch A", 2: "Branch B", 3: "Branch C" };
+const BRANCH_NAMES = BRANCH_LABELS; // display names only
 
 function ItemRow({ item, idx, products, onChange, onProductSelect, onRemove, canRemove, units }) {
   const handleDropdown = (e) => {

@@ -27,11 +27,11 @@ function pbPhoneKey(?string $p): string {
 //   1) phone number   (same phone = same customer; creates the party if new)
 //   2) invoice number (only if given and it matches a Tax Invoice)
 //   3) company name
-function pbLinkParty(mysqli $conn, string $name, string $phone, int $branchId, string $invoiceNo = ''): ?int {
+function pbLinkParty(mysqli $conn, string $name, string $phone, ?int $branchId, string $invoiceNo = ''): ?int {
     if ($phone !== '') {
         $st = $conn->prepare(
             "SELECT id FROM clients
-              WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone,''), '[^0-9]', ''), 10) = ?
+              WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?
               ORDER BY (branch_id <=> ?) DESC, id ASC LIMIT 1"
         );
         $st->bind_param('si', $phone, $branchId);
@@ -71,6 +71,7 @@ function pbLinkParty(mysqli $conn, string $name, string $phone, int $branchId, s
 
 // Load a bill and check the user may touch it
 function pbLoadBill(mysqli $conn, int $billId, array $user): array {
+    // (branch users may only touch their own branch's bills)
     $st = $conn->prepare("SELECT * FROM purchase_bills WHERE id = ?");
     $st->bind_param('i', $billId);
     $st->execute();
@@ -84,15 +85,16 @@ function pbLoadBill(mysqli $conn, int $billId, array $user): array {
 }
 
 // Add (+1) or reverse (-1) the stock of a bill's items
-function pbApplyStock(mysqli $conn, array $items, int $branchId, int $sign): void {
-    $sel = $conn->prepare("SELECT id FROM purchase_stock WHERE product_id = ? AND branch_id = ?");
+function pbApplyStock(mysqli $conn, array $items, ?int $branchId, int $sign): void {
+    // branch_id <=> ? also matches NULL (All Branch)
+    $sel = $conn->prepare("SELECT id FROM purchase_stock WHERE product_id = ? AND branch_id <=> ?");
     $upd = $conn->prepare(
         "UPDATE purchase_stock
             SET total_purchased = total_purchased + ?,
                 current_stock   = current_stock + ?,
                 rate = IF(? > 0, ?, rate),
                 product_name = IF(? > 0, ?, product_name)
-          WHERE product_id = ? AND branch_id = ?"
+          WHERE product_id = ? AND branch_id <=> ?"
     );
     $ins = $conn->prepare(
         "INSERT INTO purchase_stock (product_id, product_name, total_purchased, current_stock, rate, branch_id)
@@ -136,6 +138,22 @@ function pbEnsurePaymentsTable(mysqli $conn): void {
 
 // ── Round off ─────────────────────────────────────────────────
 // Adds purchase_bills.round_off_mode / round_off once (MySQL + MariaDB safe)
+// "All Branch" purchase bills store branch_id = NULL → columns must allow it
+function pbEnsureNullableBranch(mysqli $conn): void {
+    $targets = [
+        'purchase_bills'      => 'branch_id',
+        'purchase_bill_items' => 'branch_id',
+        'purchase_stock'      => 'branch_id',
+    ];
+    foreach ($targets as $table => $col) {
+        $res = $conn->query("SHOW COLUMNS FROM $table LIKE '$col'");
+        $row = $res ? $res->fetch_assoc() : null;
+        if ($row && strtoupper($row['Null']) === 'NO') {
+            $conn->query("ALTER TABLE $table MODIFY COLUMN $col INT UNSIGNED NULL DEFAULT NULL");
+        }
+    }
+}
+
 function pbEnsureRoundOffColumns(mysqli $conn): void {
     $cols = [
         'round_off_mode' => "VARCHAR(10) NOT NULL DEFAULT 'none'",

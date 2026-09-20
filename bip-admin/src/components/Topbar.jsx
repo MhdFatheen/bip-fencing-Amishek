@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
+import { BRANCH_LABELS, branchLabel } from "../utils/branchNames";
 
 const BRANCHES = [
   { value: "", label: "All Branches" },
-  { value: "1", label: "Branch A" },
-  { value: "2", label: "Branch B" },
-  { value: "3", label: "Branch C" },
+  { value: "1", label: BRANCH_LABELS[1] },
+  { value: "2", label: BRANCH_LABELS[2] },
+  { value: "3", label: BRANCH_LABELS[3] },
 ];
 
 export default function Topbar() {
@@ -53,7 +54,7 @@ export default function Topbar() {
 
   // Handle branch switch for admin
   const handleBranchSwitch = (branchId) => {
-    const branchNames = { 1: "Branch A", 2: "Branch B", 3: "Branch C" };
+    const branchNames = BRANCH_LABELS;
     if (branchId === "") {
       localStorage.removeItem("admin_view_branch");
       localStorage.removeItem("admin_view_branch_name");
@@ -67,8 +68,7 @@ export default function Topbar() {
   // Get branch display text for admin
   const getAdminBranchDisplay = () => {
     if (!viewBranch) return "All Branches";
-    const branches = { 1: "Branch A", 2: "Branch B", 3: "Branch C" };
-    return branches[viewBranch] || `Branch ${viewBranch}`;
+    return BRANCH_LABELS[viewBranch] || `Branch ${viewBranch}`;
   };
 
   const role = localStorage.getItem("role");
@@ -99,7 +99,7 @@ export default function Topbar() {
           branchName && (
             <div className="tb-branch">
               <i className="bi bi-shop"></i>
-              <span>{branchName}</span>
+              <span>{branchLabel(branchName)}</span>
             </div>
           )
         )}

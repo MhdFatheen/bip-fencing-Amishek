@@ -383,7 +383,7 @@ const Employee_details = () => {
           {!isBranchSelected && userRole === "admin" && (
             <div className="ep-alert">
               <i className="bi bi-exclamation-triangle-fill"></i>
-              Please select a specific branch (Branch A, B, or C) from the
+              Please select a specific branch (Valioor, Naguneri or Kadambakulam) from the
               topbar to add an employee.
             </div>
           )}

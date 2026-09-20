@@ -24,12 +24,9 @@ function getEffectiveBranchId($user): ?int {
     return null;
 }
 
+// null = "All Branches" selected → the bill is saved without a branch
 $branchId = getEffectiveBranchId($authUser);
-if ($branchId === null) {
-    http_response_code(400);
-    echo json_encode(['message' => 'Please select a specific branch to add purchase bills.']);
-    exit;
-}
+
 
 $data = json_decode(file_get_contents('php://input'), true);
 if (!$data) {
@@ -103,6 +100,7 @@ $total_amount = round($subtotal + $gst_amount + $round_off + $opening_balance, 2
 
 $conn = getDB();
 pbEnsureRoundOffColumns($conn);
+pbEnsureNullableBranch($conn);
 $conn->begin_transaction();
 
 try {
@@ -133,7 +131,7 @@ try {
     );
 
     $stockSelectStmt = $conn->prepare(
-        "SELECT current_stock, total_purchased FROM purchase_stock WHERE product_id = ? AND branch_id = ?"
+        "SELECT current_stock, total_purchased FROM purchase_stock WHERE product_id = ? AND branch_id <=> ?"
     );
 
     $stockUpdateStmt = $conn->prepare(
@@ -142,7 +140,7 @@ try {
                 current_stock    = current_stock + ?,
                 rate             = ?,
                 product_name     = ?
-          WHERE product_id = ? AND branch_id = ?"
+          WHERE product_id = ? AND branch_id <=> ?"
     );
 
     $stockInsertStmt = $conn->prepare(

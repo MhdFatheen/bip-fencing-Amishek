@@ -106,6 +106,7 @@ $total_tax            = $f('total_tax');
 $round_off            = $f('round_off');
 $net_amount           = $f('net_amount');
 $open_balance         = $f('open_balance');
+$paid_amount          = $f('paid_amount');   // Balance Tracking → Paid Amount
 $closing_balance      = $f('closing_balance');
 $bank_holder_name     = $s('bank_holder_name');
 $bank_name            = $s('bank_name');
@@ -115,6 +116,12 @@ $bank_branch          = $s('bank_branch');
 
 // Does invoice_items have a branch_id column? (older DBs may not)
 $itemsHaveBranch = (bool) $conn->query("SHOW COLUMNS FROM invoice_items LIKE 'branch_id'")->num_rows;
+
+// Balance Tracking → Paid Amount (column added once; MySQL 5.7+ and MariaDB)
+$paidCol = $conn->query("SHOW COLUMNS FROM invoices LIKE 'paid_amount'");
+if ($paidCol && $paidCol->num_rows === 0) {
+    $conn->query("ALTER TABLE invoices ADD COLUMN paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00");
+}
 
 $conn->begin_transaction();
 
@@ -148,7 +155,11 @@ try {
             $client_id = (int) $existingClient['id'];
             $cUpd = $conn->prepare("
                 UPDATE clients
-                   SET name = ?, phone = ?, address = ?, gst = ?, branch_id = COALESCE(branch_id, ?)
+                   SET name  = COALESCE(NULLIF(?, ''), name),
+                       phone = COALESCE(NULLIF(?, ''), phone),
+                       address = COALESCE(NULLIF(?, ''), address),
+                       gst   = COALESCE(NULLIF(?, ''), gst),
+                       branch_id = COALESCE(branch_id, ?)
                  WHERE id = ?
             ");
             $cUpd->bind_param('ssssii', $buyer_name, $buyer_phone, $buyer_address, $buyer_gst, $branch_id, $client_id);
@@ -256,6 +267,12 @@ try {
         $stmt->close();
         $action = 'created';
     }
+
+    // Balance Tracking → Paid Amount (kept separate from the statements above)
+    $pStmt = $conn->prepare("UPDATE invoices SET paid_amount = ? WHERE id = ?");
+    $pStmt->bind_param('di', $paid_amount, $invoice_id);
+    $pStmt->execute();
+    $pStmt->close();
 
     // ── Step 3: Insert line items ────────────────────────────
     if ($itemsHaveBranch) {

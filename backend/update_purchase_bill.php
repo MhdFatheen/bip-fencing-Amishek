@@ -62,8 +62,9 @@ $total_amount = round($subtotal + $gst_amount + $round_off + $opening_balance, 2
 
 $conn = getDB();
 pbEnsureRoundOffColumns($conn);
+pbEnsureNullableBranch($conn);
 $bill = pbLoadBill($conn, $billId, $authUser);
-$branchId = (int)$bill['branch_id'];
+$branchId = $bill['branch_id'] === null ? null : (int)$bill['branch_id']; // null = All Branch
 
 $conn->begin_transaction();
 try {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { apiFetch } from "../utils/api";
+import { branchLabel } from "../utils/branchNames";
 
 const getHeaders = () => {
   const headers = {
@@ -562,7 +563,7 @@ const AdminFeatures = () => {
                           <td className="af-td--num">{startIndex + idx + 1}</td>
                           <td>
                             <span className="af-branch-tag">
-                              {rec.branch_name}
+                              {branchLabel(rec.branch_name)}
                             </span>
                           </td>
                           <td>
@@ -679,7 +680,7 @@ const AdminFeatures = () => {
           {!isBranchSelected && role === "admin" && (
             <div className="af-alert">
               <i className="bi bi-exclamation-triangle-fill"></i>
-              Please select a specific branch (Branch A, B, or C) from the
+              Please select a specific branch (Valioor, Naguneri or Kadambakulam) from the
               topbar to add an amount.
             </div>
           )}

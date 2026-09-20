@@ -1167,6 +1167,60 @@ const tdCenter = { ...tdStyle, textAlign: "center" };
 const tdRight = { ...tdStyle, textAlign: "right" };
 
 // ── Main Component ────────────────────────────────────────────
+// Central customer record — used by the Add and Edit forms
+const EMPTY_CUSTOMER = {
+  name: "",
+  phone: "",
+  address: "",
+  city: "",
+  state: "Tamil Nadu",
+  state_code: "33",
+  pincode: "",
+  email: "",
+  gst: "",
+};
+
+// Fields shown in the customer form (Add + Edit)
+const CUSTOMER_FIELDS = [
+  { key: "name", label: "Customer Name", required: true },
+  { key: "phone", label: "Phone Number", hint: "Used to match the same customer everywhere" },
+  { key: "address", label: "Address" },
+  { key: "city", label: "City" },
+  { key: "state", label: "State" },
+  { key: "state_code", label: "State Code" },
+  { key: "pincode", label: "Pincode" },
+  { key: "email", label: "Email" },
+  { key: "gst", label: "GST Number" },
+];
+
+function CustomerFormFields({ form, setForm, onPhoneBlur }) {
+  return (
+    <>
+      {CUSTOMER_FIELDS.map((f) => (
+        <div className="cl-fg" key={f.key}>
+          <label className="cl-label">
+            {f.label} {f.required && <span className="cl-req">*</span>}
+          </label>
+          <input
+            className="cl-input"
+            type="text"
+            value={form[f.key] || ""}
+            onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+            onBlur={
+              f.key === "phone" && onPhoneBlur
+                ? (e) => onPhoneBlur(e.target.value)
+                : undefined
+            }
+          />
+          {f.hint && (
+            <small style={{ color: "#6b7280", fontSize: 12 }}>{f.hint}</small>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 export default function Clients() {
   const isAdmin = getRole()?.toLowerCase() === "admin";
   const navigate = useNavigate();
@@ -1200,13 +1254,14 @@ export default function Clients() {
   const [viewQuotationLoading, setViewQuotationLoading] = useState(false);
 
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editForm, setEditForm] = useState({
-    name: "",
-    phone: "",
-    address: "",
-    gst: "",
-  });
+  const [editForm, setEditForm] = useState({ ...EMPTY_CUSTOMER });
   const [editLoading, setEditLoading] = useState(false);
+
+  // ── Add Customer (central customer database) ───────────────
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({ ...EMPTY_CUSTOMER });
+  const [addLoading, setAddLoading] = useState(false);
+  const [existingHint, setExistingHint] = useState("");
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -1474,9 +1529,78 @@ export default function Clients() {
       name: client.name || "",
       phone: client.phone || "",
       address: client.address || "",
+      city: client.city || "",
+      state: client.state || "Tamil Nadu",
+      state_code: client.state_code || "33",
+      pincode: client.pincode || "",
+      email: client.email || "",
       gst: client.gst || "",
     });
     setShowEditModal(true);
+  };
+
+  const openAddModal = () => {
+    setAddForm({ ...EMPTY_CUSTOMER });
+    setExistingHint("");
+    setShowAddModal(true);
+  };
+
+  // Same phone = same customer → warn and load the saved details
+  const checkExistingPhone = async (phone) => {
+    const key = String(phone || "").replace(/\D/g, "").slice(-10);
+    if (key.length !== 10) {
+      setExistingHint("");
+      return;
+    }
+    try {
+      const res = await apiFetch(`/client.php?phone=${key}`);
+      const data = await res.json();
+      if (data.found && data.client) {
+        setExistingHint(`This phone already belongs to ${data.client.name}. Saving will update that customer.`);
+        setAddForm((prev) => ({
+          ...prev,
+          name: prev.name || data.client.name || "",
+          address: prev.address || data.client.address || "",
+          city: prev.city || data.client.city || "",
+          state: data.client.state || prev.state,
+          state_code: data.client.state_code || prev.state_code,
+          pincode: prev.pincode || data.client.pincode || "",
+          email: prev.email || data.client.email || "",
+          gst: prev.gst || data.client.gst || "",
+        }));
+      } else {
+        setExistingHint("");
+      }
+    } catch (_) {
+      /* ignore lookup errors */
+    }
+  };
+
+  const handleAddCustomer = async () => {
+    if (!addForm.name.trim()) {
+      showToast("Customer name is required", "error");
+      return;
+    }
+    setAddLoading(true);
+    try {
+      const res = await apiFetch("/client.php?action=save_customer", {
+        method: "POST",
+        body: JSON.stringify(addForm),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setShowAddModal(false);
+        showToast(data.message || "Customer saved");
+        fetchClients();
+      } else {
+        showToast(data.message || "Could not save the customer", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Server error", "error");
+    } finally {
+      setAddLoading(false);
+    }
   };
 
   const handleEditClient = async () => {
@@ -1832,6 +1956,13 @@ export default function Clients() {
             <i className="bi bi-people"></i>
             <span>Customer Directory</span>
             <span className="cl-count">{filtered.length} customers</span>
+            <button
+              className="cl-btn cl-btn--primary"
+              style={{ marginLeft: "auto" }}
+              onClick={openAddModal}
+            >
+              <i className="bi bi-person-plus"></i> Add Customer
+            </button>
           </div>
 
           <div className="cl-filters">
@@ -2055,7 +2186,7 @@ export default function Clients() {
 
             {/* Sub-tabs */}
             <div className="cl-subtabs">
-              {["overview", "invoices", "purchases", "payments"].map((tab) => (
+              {["overview", "invoices", "purchases", "quotations", "payments"].map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -2194,6 +2325,38 @@ export default function Clients() {
                       Owe
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* Quotations tab — this customer's quotations */}
+              {!detailLoading && activeTab === "quotations" && clientDetail && (
+                <div>
+                  <p className="cl-subhint">
+                    Quotations sent to this customer
+                  </p>
+                  {(clientDetail.quotations || []).length === 0 && (
+                    <div className="cl-empty cl-empty--small">
+                      <i className="bi bi-inbox"></i>
+                      <p>No quotations for this customer</p>
+                    </div>
+                  )}
+                  {(clientDetail.quotations || []).map((q) => (
+                    <div key={q.id} className="cl-list-item">
+                      <div>
+                        <div className="cl-list-item__title">{q.quote_no}</div>
+                        <div className="cl-list-item__sub">
+                          {q.quote_date}
+                          {q.client_phone ? ` · ${q.client_phone}` : ""}
+                        </div>
+                      </div>
+                      <button
+                        className="cl-btn cl-btn--ghost"
+                        onClick={() => handleViewQuotation(q.id)}
+                      >
+                        <i className="bi bi-eye"></i> View
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -2622,6 +2785,62 @@ export default function Clients() {
         </div>
       )}
 
+      {/* ── Add Customer Modal ── */}
+      {showAddModal && (
+        <div className="cl-overlay" onClick={() => setShowAddModal(false)}>
+          <div className="cl-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="cl-modal__header">
+              <div className="cl-modal__title">
+                <i className="bi bi-person-plus"></i> Add Customer
+              </div>
+              <button
+                className="cl-modal__close"
+                onClick={() => setShowAddModal(false)}
+              >
+                <i className="bi bi-x-lg"></i>
+              </button>
+            </div>
+            <div className="cl-modal__body cl-modal__body--col">
+              {existingHint && (
+                <div
+                  style={{
+                    background: "#fff7ed",
+                    color: "#9a3412",
+                    border: "1px solid #fed7aa",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    fontSize: 13,
+                  }}
+                >
+                  <i className="bi bi-info-circle"></i> {existingHint}
+                </div>
+              )}
+              <CustomerFormFields
+                form={addForm}
+                setForm={setAddForm}
+                onPhoneBlur={checkExistingPhone}
+              />
+            </div>
+            <div className="cl-modal__footer">
+              <button
+                className="cl-btn cl-btn--ghost"
+                onClick={() => setShowAddModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="cl-btn cl-btn--primary"
+                onClick={handleAddCustomer}
+                disabled={addLoading}
+              >
+                <i className="bi bi-check-circle"></i>{" "}
+                {addLoading ? "Saving…" : "Save Customer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Edit Client Modal ── */}
       {showEditModal && (
         <div className="cl-overlay" onClick={() => setShowEditModal(false)}>
@@ -2638,52 +2857,7 @@ export default function Clients() {
               </button>
             </div>
             <div className="cl-modal__body cl-modal__body--col">
-              <div className="cl-fg">
-                <label className="cl-label">
-                  Name <span className="cl-req">*</span>
-                </label>
-                <input
-                  className="cl-input"
-                  type="text"
-                  value={editForm.name}
-                  onChange={(e) =>
-                    setEditForm({ ...editForm, name: e.target.value })
-                  }
-                />
-              </div>
-              <div className="cl-fg">
-                <label className="cl-label">Phone</label>
-                <input
-                  className="cl-input"
-                  type="text"
-                  value={editForm.phone}
-                  onChange={(e) =>
-                    setEditForm({ ...editForm, phone: e.target.value })
-                  }
-                />
-              </div>
-              <div className="cl-fg">
-                <label className="cl-label">Address</label>
-                <input
-                  className="cl-input"
-                  type="text"
-                  value={editForm.address}
-                  onChange={(e) =>
-                    setEditForm({ ...editForm, address: e.target.value })
-                  }
-                />
-              </div>
-              <div className="cl-fg">
-                <label className="cl-label">GST Number</label>
-                <input
-                  className="cl-input"
-                  type="text"
-                  value={editForm.gst}
-                  onChange={(e) =>
-                    setEditForm({ ...editForm, gst: e.target.value })
-                  }
-                />
-              </div>
+              <CustomerFormFields form={editForm} setForm={setEditForm} />
             </div>
             <div className="cl-modal__footer">
               <button

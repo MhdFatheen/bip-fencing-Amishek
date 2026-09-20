@@ -4,7 +4,9 @@
 
 import React, { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import Select from "react-select";
 import { apiFetch } from "../utils/api";
+import { BRANCH_LABELS } from "../utils/branchNames";
 
 const SESSION_KEY = "bip_tax_invoice_form";
 
@@ -35,10 +37,11 @@ const COPY_TYPES = [
 ];
 
 // Products live per-branch — a single invoice can pull items from any of these.
+// Display names only — the ids sent to the backend are unchanged
 const BRANCHES = [
-  { id: 1, name: "Branch A" },
-  { id: 2, name: "Branch B" },
-  { id: 3, name: "Branch C" },
+  { id: 1, name: BRANCH_LABELS[1] },
+  { id: 2, name: BRANCH_LABELS[2] },
+  { id: 3, name: BRANCH_LABELS[3] },
 ];
 
 // Logo as base64 so no external file dependency
@@ -124,6 +127,35 @@ const ALL_BRANCH = "all";
 const stockBranchOf = (p) =>
   p.branchId === ALL_BRANCH ? p.productBranchId : p.branchId;
 
+// Compact styling so the searchable dropdown matches the table inputs
+const productSelectStyles = {
+  container: (b) => ({ ...b, width: "100%", minWidth: 170 }),
+  control: (b, state) => ({
+    ...b,
+    minHeight: 34,
+    fontSize: 13,
+    borderColor: state.isFocused ? "#008b3e" : "#cbd5e1",
+    boxShadow: state.isFocused ? "0 0 0 2px rgba(0,139,62,.15)" : "none",
+    "&:hover": { borderColor: "#008b3e" },
+  }),
+  valueContainer: (b) => ({ ...b, padding: "0 6px" }),
+  dropdownIndicator: (b) => ({ ...b, padding: 4 }),
+  clearIndicator: (b) => ({ ...b, padding: 4 }),
+  indicatorSeparator: () => ({ display: "none" }),
+  menu: (b) => ({ ...b, fontSize: 13, zIndex: 9999 }),
+  menuPortal: (b) => ({ ...b, zIndex: 9999 }),
+  option: (b, state) => ({
+    ...b,
+    padding: "6px 10px",
+    backgroundColor: state.isSelected
+      ? "#008b3e"
+      : state.isFocused
+        ? "#e8f5ee"
+        : "#fff",
+    color: state.isSelected ? "#fff" : "#1e293b",
+  }),
+};
+
 const emptyProduct = () => ({
   branchId: null,
   productBranchId: null,
@@ -164,6 +196,7 @@ const DEFAULT_FORM = {
   buyerState: "Tamil Nadu",
   buyerStateCode: "33",
   openBalance: "",
+  paidAmount: "",
   closingBalance: "",
   roundOffManual: "",
   gstRate: 18,
@@ -206,6 +239,7 @@ const mapInvoiceToForm = (inv) => ({
   buyerState: inv.buyer_state || DEFAULT_FORM.buyerState,
   buyerStateCode: inv.buyer_state_code || DEFAULT_FORM.buyerStateCode,
   openBalance: inv.open_balance != null ? String(inv.open_balance) : "",
+  paidAmount: inv.paid_amount != null ? String(inv.paid_amount) : "",
   closingBalance: inv.closing_balance != null ? String(inv.closing_balance) : "",
   gstRate: inv.gst_rate ? Number(inv.gst_rate) : DEFAULT_FORM.gstRate,
   bankHolderName: inv.bank_holder_name || DEFAULT_BANK.holderName,
@@ -483,14 +517,18 @@ export default function TaxInvoice() {
   const [existingInvoiceError, setExistingInvoiceError] = useState(null);
   const [clientsList, setClientsList] = useState([]);
 
+  const fetchClients = async () => {
+    try {
+      const res = await apiFetch("/client.php");
+      const data = await res.json();
+      if (data.success) setClientsList(data.clients || []);
+    } catch (_) {
+      /* keep the old list */
+    }
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await apiFetch("/client.php");
-        const data = await res.json();
-        if (data.success) setClientsList(data.clients || []);
-      } catch (_) {}
-    })();
+    fetchClients();
   }, []);
 
   // ── Check user role on mount ───────────────────────────────────────────────
@@ -561,7 +599,7 @@ export default function TaxInvoice() {
     error: null,
   }));
 
-  // All Branches mode → use the first product row's branch for numbering
+  // Invoice number is global — works for a specific branch AND for All Branch
   const fetchInvoiceNoPeek = async (branchId = null) => {
     try {
       const res = await apiFetch(
@@ -578,10 +616,7 @@ export default function TaxInvoice() {
         setBranchInfo({
           loading: false,
           branchId: null,
-          error:
-            data.message === "no_branch_selected"
-              ? "Pick a Branch in the first product row to get the invoice number."
-              : "Could not load the invoice number.",
+          error: "Could not load the invoice number. Click Refresh to try again.",
         });
       }
     } catch (_) {
@@ -718,6 +753,79 @@ export default function TaxInvoice() {
     setErrors((p) => ({ ...p, buyerName: "", buyerPhone: "" }));
   };
 
+  // ── Central customer database: phone is the key ───────────────────────────
+  const [customerStatus, setCustomerStatus] = useState({ state: "", name: "" });
+  const [savingCustomer, setSavingCustomer] = useState(false);
+
+  // Type a saved phone number → fill every detail we have
+  const lookupCustomerByPhone = async (phone) => {
+    const key = String(phone || "").replace(/\D/g, "").slice(-10);
+    if (key.length !== 10) {
+      setCustomerStatus({ state: "", name: "" });
+      return;
+    }
+    try {
+      const res = await apiFetch(`/client.php?phone=${key}`);
+      const data = await res.json();
+      if (data.found && data.client) {
+        const c = data.client;
+        setForm((prev) => ({
+          ...prev,
+          buyerName: c.name || prev.buyerName,
+          buyerAddress: c.address || prev.buyerAddress,
+          buyerGst: c.gst || prev.buyerGst,
+          buyerState: c.state || prev.buyerState,
+          buyerStateCode: c.state_code || prev.buyerStateCode,
+          buyerCity: c.city || prev.buyerCity || "",
+          buyerPincode: c.pincode || prev.buyerPincode || "",
+          buyerEmail: c.email || prev.buyerEmail || "",
+        }));
+        setErrors((p) => ({ ...p, buyerName: "", buyerPhone: "" }));
+        setCustomerStatus({ state: "found", name: c.name || "" });
+      } else {
+        setCustomerStatus({ state: "new", name: "" });
+      }
+    } catch (_) {
+      setCustomerStatus({ state: "", name: "" });
+    }
+  };
+
+  // Save the typed details as a customer (no duplicate for the same phone)
+  const saveBuyerAsCustomer = async () => {
+    if (!form.buyerName.trim()) {
+      alert("⚠️ Enter the customer name first.");
+      return;
+    }
+    setSavingCustomer(true);
+    try {
+      const res = await apiFetch("/client.php?action=save_customer", {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.buyerName,
+          phone: form.buyerPhone,
+          address: form.buyerAddress,
+          gst: form.buyerGst,
+          state: form.buyerState,
+          state_code: form.buyerStateCode,
+          city: form.buyerCity || "",
+          pincode: form.buyerPincode || "",
+          email: form.buyerEmail || "",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCustomerStatus({ state: "found", name: form.buyerName });
+        fetchClients();
+      } else {
+        alert("⚠️ " + (data.message || "Could not save the customer."));
+      }
+    } catch (_) {
+      alert("⚠️ Server error while saving the customer.");
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
+
   const pickConsignee = (c) => {
     setForm((prev) => ({
       ...prev,
@@ -755,7 +863,19 @@ export default function TaxInvoice() {
 
   const handleProductSelect = (idx, productId) => {
     if (!productId) {
-      handleProduct(idx, "desc", "");
+      // "x" clicked in the search box → empty the row's product
+      setProducts((prev) => {
+        const updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          productId: null,
+          productBranchId: null,
+          desc: "",
+          hsn: "",
+          rateIncl: "",
+        };
+        return updated;
+      });
       return;
     }
     // All Branch rows use "branchId:productId" as the option value
@@ -840,7 +960,10 @@ export default function TaxInvoice() {
       ? r2(parseFloat(form.roundOffManual))
       : autoRoundOff;
   const netAmount = r2(gross + roundOff);
-  const closingBalance = (parseFloat(form.openBalance) || 0) + netAmount;
+  // Open Balance + this invoice − Paid Amount
+  const paidAmount = parseFloat(form.paidAmount) || 0;
+  const closingBalance =
+    (parseFloat(form.openBalance) || 0) + netAmount - paidAmount;
 
   const hsnGroups = {};
   rows.forEach((r) => {
@@ -952,11 +1075,7 @@ export default function TaxInvoice() {
         });
         const data = await res.json();
         if (!data.success) {
-          alert(
-            data.message === "no_branch_selected"
-              ? "⚠️ Please select a Branch in the first product row."
-              : "⚠️ Could not generate the invoice number. Please try again.",
-          );
+          alert("⚠️ Could not generate the invoice number. Please try again.");
           return;
         }
         invoiceNoToUse = data.invoice_no;
@@ -1011,6 +1130,7 @@ export default function TaxInvoice() {
         round_off: roundOff,
         net_amount: netAmount,
         open_balance: form.openBalance,
+        paid_amount: paidAmount,
         closing_balance: closingBalance,
         bank_holder_name: form.bankHolderName,
         bank_name: form.bankName,
@@ -1267,7 +1387,7 @@ export default function TaxInvoice() {
                 <div className="at-hint">
                   {form.invoiceNoLocked
                     ? "Reserved for this invoice."
-                    : "Auto-generated per branch — finalized when you click Preview."}
+                    : "Auto-generated (specific branch or All Branch) — finalized when you click Preview."}
                 </div>
                 {branchInfo.error && <div className="at-error-text">{branchInfo.error}</div>}
               </div>
@@ -1419,13 +1539,44 @@ export default function TaxInvoice() {
                   onChange={(e) => {
                     const val = e.target.value.replace(/\D/g, "").slice(0, 10);
                     setForm((prev) => ({ ...prev, buyerPhone: val }));
-                    if (val.length > 0 && val.length < 10)
+                    if (val.length > 0 && val.length < 10) {
                       setErrors((p) => ({ ...p, buyerPhone: "Phone must be 10 digits" }));
-                    else setErrors((p) => ({ ...p, buyerPhone: "" }));
+                      setCustomerStatus({ state: "", name: "" });
+                    } else {
+                      setErrors((p) => ({ ...p, buyerPhone: "" }));
+                      if (val.length === 10) lookupCustomerByPhone(val);
+                    }
                   }}
+                  onBlur={(e) => lookupCustomerByPhone(e.target.value)}
                   maxLength={10}
                 />
                 {errors.buyerPhone && <div className="at-error-text">{errors.buyerPhone}</div>}
+                {customerStatus.state === "found" && (
+                  <small style={{ color: "#008b3e", fontSize: 12, fontWeight: 600 }}>
+                    <i className="bi bi-check-circle"></i> Saved customer
+                    {customerStatus.name ? `: ${customerStatus.name}` : ""}
+                  </small>
+                )}
+                {customerStatus.state === "new" && (
+                  <small style={{ color: "#6b7280", fontSize: 12 }}>
+                    New number —{" "}
+                    <button
+                      type="button"
+                      onClick={saveBuyerAsCustomer}
+                      disabled={savingCustomer}
+                      style={{
+                        border: "none",
+                        background: "none",
+                        padding: 0,
+                        color: "#008b3e",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {savingCustomer ? "saving…" : "save as customer"}
+                    </button>
+                  </small>
+                )}
               </div>
               <div className="at-fg">
                 <label className="at-label">GST No</label>
@@ -1451,9 +1602,9 @@ export default function TaxInvoice() {
             <div className="at-alert">
               <i className="bi bi-info-circle-fill"></i>
               <div>
-                Pick a <strong>Branch</strong> for each row first — items can come from Branch A, B
-                and C on the same invoice. Once a branch is chosen, its product list appears in
-                Description.
+                Pick a <strong>Branch</strong> for each row first — items can come from Valioor,
+                Naguneri and Kadambakulam on the same invoice. Once a branch is chosen, its product
+                list appears in Description.
               </div>
             </div>
             <div className="at-table-wrap">
@@ -1520,20 +1671,38 @@ export default function TaxInvoice() {
                         </td>
                         <td>
                           {p.branchId ? (
-                            <select
-                              className={`at-select-t${errors[`desc_${i}`] ? " error-field" : ""}`}
-                              value={selectedValue}
-                              onChange={(e) => handleProductSelect(i, e.target.value)}
-                            >
-                              <option value="">
-                                {!p.productId && p.desc ? p.desc : "— Select Product —"}
-                              </option>
-                              {branchProducts.map((sp) => (
-                                <option key={sp.optionValue} value={sp.optionValue}>
-                                  {sp.label}
-                                </option>
-                              ))}
-                            </select>
+                            <Select
+                              inputId={`product_${i}`}
+                              options={branchProducts.map((sp) => ({
+                                value: String(sp.optionValue),
+                                label: sp.label,
+                              }))}
+                              value={
+                                selectedValue
+                                  ? {
+                                      value: String(selectedValue),
+                                      label:
+                                        branchProducts.find(
+                                          (sp) =>
+                                            String(sp.optionValue) === String(selectedValue),
+                                        )?.label || p.desc,
+                                    }
+                                  : null
+                              }
+                              onChange={(opt) => handleProductSelect(i, opt ? opt.value : "")}
+                              placeholder={
+                                !p.productId && p.desc ? p.desc : "Type to search…"
+                              }
+                              isClearable
+                              isSearchable
+                              noOptionsMessage={() => "No matching product"}
+                              menuPortalTarget={
+                                typeof document !== "undefined" ? document.body : null
+                              }
+                              menuPosition="fixed"
+                              styles={productSelectStyles}
+                              className={errors[`desc_${i}`] ? "error-field" : undefined}
+                            />
                           ) : (
                             <input className="at-input-t" value="" placeholder="Select a branch first" disabled />
                           )}
@@ -1650,9 +1819,22 @@ export default function TaxInvoice() {
                 />
               </div>
               <div className="at-fg">
+                <label className="at-label">Paid Amount (₹)</label>
+                <input
+                  type="number"
+                  className="at-input"
+                  name="paidAmount"
+                  value={form.paidAmount}
+                  onChange={handleForm}
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="at-fg">
                 <label className="at-label">Closing Balance (₹)</label>
                 <input type="text" className="at-input" value={fmt2(closingBalance)} readOnly disabled />
-                <div className="at-hint">Auto = Open Balance + Net Amount</div>
+                <div className="at-hint">
+                  Auto = Open Balance + Net Amount − Paid Amount
+                </div>
               </div>
             </div>
           </div>
@@ -2004,6 +2186,9 @@ export default function TaxInvoice() {
                 <td colSpan={8} style={dc({ borderTop: "1px dashed #999", padding: "3px 7px" })}>
                   <div style={{ fontWeight: "bold", fontSize: dynFont + 2 }}>
                     Open Balance: ₹ {fmt2(form.openBalance || 0)}
+                  </div>
+                  <div>
+                    Paid Amount: ₹ {fmt2(paidAmount)}
                   </div>
                   <div style={{ fontWeight: "bold", fontSize: dynFont + 2 }}>
                     Closing Balance: ₹ {fmt2(closingBalance)}

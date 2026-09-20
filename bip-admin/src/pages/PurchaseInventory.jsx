@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { apiFetch } from "../utils/api";
+import { branchLabel } from "../utils/branchNames";
 
 const safeFetchJSON = async (path, options = {}) => {
   const response = await apiFetch(path, options);
@@ -509,7 +510,7 @@ export default function PurchaseInventory() {
                   <i className="bi bi-building"></i>
                   <div>
                     Viewing all branches. Select a specific branch from the
-                    topbar (Branch A, B or C) to deduct stock.
+                    topbar (Valioor, Naguneri or Kadambakulam) to deduct stock.
                   </div>
                 </div>
               )}
@@ -680,7 +681,7 @@ export default function PurchaseInventory() {
                           {isAdmin && (
                             <div className="at-bubble-stat">
                               <b>Branch</b>
-                              {p.branch_name || "—"}
+                              {branchLabel(p.branch_name) || "—"}
                             </div>
                           )}
                           <div className="at-bubble-stat">

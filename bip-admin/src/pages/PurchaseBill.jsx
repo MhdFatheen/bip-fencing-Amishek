@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { apiFetch } from "../utils/api";
+import { branchLabel } from "../utils/branchNames";
 
 // ── Helpers ─────────────────────────────────────────────────
 const emptyItem = () => ({
@@ -137,6 +138,37 @@ export default function PurchaseBill() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedParty?.id]);
+
+  // Save a new phone + name into the central customer database
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const saveSupplierAsCustomer = async () => {
+    if (!form.company_name.trim()) {
+      setFormError("Enter the company / customer name first");
+      return;
+    }
+    setSavingCustomer(true);
+    try {
+      const res = await apiFetch("/client.php?action=save_customer", {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.company_name,
+          phone: form.supplier_phone,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const listRes = await apiFetch("/client.php");
+        const listData = await listRes.json();
+        if (listData.success) setParties(listData.clients || []);
+      } else {
+        setFormError(data.message || "Could not save the customer");
+      }
+    } catch (_) {
+      setFormError("Server error while saving the customer");
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
 
   const handleFilterChange = (e) =>
     setFilters({ ...filters, [e.target.name]: e.target.value });
@@ -508,6 +540,25 @@ export default function PurchaseBill() {
                   customer: {linkedParty.name} ({linkedParty.total_invoices || 0}{" "}
                   invoice{Number(linkedParty.total_invoices) === 1 ? "" : "s"})
                 </small>
+              ) : supplierKey.length === 10 ? (
+                <small style={{ color: "#6b7280", fontSize: 12 }}>
+                  New number —{" "}
+                  <button
+                    type="button"
+                    onClick={saveSupplierAsCustomer}
+                    disabled={savingCustomer}
+                    style={{
+                      border: "none",
+                      background: "none",
+                      padding: 0,
+                      color: "#008b3e",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {savingCustomer ? "saving…" : "save as customer"}
+                  </button>
+                </small>
               ) : (
                 <small style={{ color: "#6b7280", fontSize: 12 }}>
                   Enter the same number used on their tax invoice to net the
@@ -733,16 +784,50 @@ export default function PurchaseBill() {
             {form.round_off_mode === "manual" && (
               <div className="at-fg" style={{ minWidth: 200, margin: 0 }}>
                 <label className="at-label">Round Off Amount (₹)</label>
-                <input
-                  type="number"
-                  name="round_off"
-                  step="0.01"
-                  placeholder="e.g. 0.40 or -0.60"
-                  className="at-input"
-                  value={form.round_off}
-                  onChange={handleHeaderChange}
-                  onWheel={(e) => e.target.blur()}
-                />
+                {/* text + decimal keypad so "-" can be typed on mobile too */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    className="at-btn"
+                    title="Switch between + and −"
+                    style={{
+                      minWidth: 44,
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 8,
+                      background: "#fff",
+                      fontWeight: 800,
+                      cursor: "pointer",
+                    }}
+                    onClick={() => {
+                      const v = String(form.round_off || "").trim();
+                      const flipped = v.startsWith("-")
+                        ? v.slice(1)
+                        : v === ""
+                          ? "-"
+                          : `-${v}`;
+                      setForm({ ...form, round_off: flipped });
+                    }}
+                  >
+                    {String(form.round_off || "").trim().startsWith("-") ? "−" : "+"}
+                  </button>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    name="round_off"
+                    placeholder="e.g. 0.40 or -0.60"
+                    className="at-input"
+                    value={form.round_off}
+                    onChange={(e) => {
+                      // keep digits, one dot and a leading minus only
+                      let v = e.target.value.replace(/[^0-9.-]/g, "");
+                      const neg = v.startsWith("-");
+                      v = v.replace(/-/g, "");
+                      const parts = v.split(".");
+                      v = parts.shift() + (parts.length ? "." + parts.join("") : "");
+                      setForm({ ...form, round_off: (neg ? "-" : "") + v });
+                    }}
+                  />
+                </div>
                 <small style={{ color: "#6b7280", fontSize: 12 }}>
                   Use − to reduce the amount. Auto would be {signed(autoRoundOff)}
                 </small>
@@ -1021,7 +1106,7 @@ export default function PurchaseBill() {
                           {isAdmin && bill.branch_name && (
                             <span className="bill-branch">
                               <i className="bi bi-building"></i>{" "}
-                              {bill.branch_name}
+                              {branchLabel(bill.branch_name)}
                             </span>
                           )}
                           {Number(bill.gst_enabled) === 1 && (

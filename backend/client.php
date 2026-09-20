@@ -53,7 +53,7 @@ function purchaseBillsForClient(mysqli $conn, array $client, $branch_id): array
           FROM purchase_bills
          WHERE (
                  client_id = ?
-                 OR (? <> '' AND RIGHT(REGEXP_REPLACE(COALESCE(supplier_phone,''), '[^0-9]', ''), 10) = ?)
+                 OR (? <> '' AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)
                  OR (LOWER(TRIM(company_name)) = LOWER(TRIM(?)))
                )
     ";
@@ -61,7 +61,8 @@ function purchaseBillsForClient(mysqli $conn, array $client, $branch_id): array
     $types  = 'isss';
 
     if ($branch_id !== null) {
-        $sql     .= " AND branch_id = ? ";
+        // "All Branch" bills (branch_id IS NULL) belong to every branch view
+        $sql     .= " AND (branch_id = ? OR branch_id IS NULL) ";
         $params[] = $branch_id;
         $types   .= 'i';
     }
@@ -76,6 +77,60 @@ function purchaseBillsForClient(mysqli $conn, array $client, $branch_id): array
     return $rows;
 }
 
+// ── Central customer table: extra detail columns ─────────────
+//    Added once, works on MySQL 5.7+ and MariaDB.
+function ensureCustomerColumns(mysqli $conn): void {
+    $cols = [
+        'email'      => "VARCHAR(150) DEFAULT NULL",
+        'city'       => "VARCHAR(100) DEFAULT NULL",
+        'state'      => "VARCHAR(100) DEFAULT NULL",
+        'state_code' => "VARCHAR(10)  DEFAULT NULL",
+        'pincode'    => "VARCHAR(12)  DEFAULT NULL",
+    ];
+    foreach ($cols as $col => $def) {
+        $res = $conn->query("SHOW COLUMNS FROM clients LIKE '$col'");
+        if ($res && $res->num_rows === 0) {
+            $conn->query("ALTER TABLE clients ADD COLUMN $col $def");
+        }
+    }
+}
+ensureCustomerColumns($conn);
+
+// Find one customer by phone (last 10 digits = the customer key)
+function findCustomerByPhone(mysqli $conn, string $phone, $branch_id): ?array {
+    if ($phone === '') return null;
+    $sql = "SELECT * FROM clients
+             WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?
+             ORDER BY (branch_id <=> ?) DESC, id ASC LIMIT 1";
+    $st = $conn->prepare($sql);
+    $st->bind_param('si', $phone, $branch_id);
+    $st->execute();
+    $row = $st->get_result()->fetch_assoc();
+    $st->close();
+    return $row ?: null;
+}
+
+// Fill in state / address details from the customer's latest invoice
+function customerWithFallbacks(mysqli $conn, array $c): array {
+    $st = $conn->prepare(
+        "SELECT buyer_address, buyer_gst, buyer_state, buyer_state_code
+           FROM invoices WHERE client_id = ? ORDER BY id DESC LIMIT 1"
+    );
+    $st->bind_param('i', $c['id']);
+    $st->execute();
+    $inv = $st->get_result()->fetch_assoc();
+    $st->close();
+
+    $c['address']    = $c['address']    ?: ($inv['buyer_address'] ?? '');
+    $c['gst']        = $c['gst']        ?: ($inv['buyer_gst'] ?? '');
+    $c['state']      = $c['state']      ?: ($inv['buyer_state'] ?? 'Tamil Nadu');
+    $c['state_code'] = $c['state_code'] ?: ($inv['buyer_state_code'] ?? '33');
+    foreach (['email', 'city', 'pincode'] as $f) {
+        $c[$f] = $c[$f] ?? '';
+    }
+    return $c;
+}
+
 switch ($method) {
 
     // ----------------------------------------------------------
@@ -84,6 +139,18 @@ switch ($method) {
     case 'GET':
 
         // ── Single invoice with items ─────────────────────────
+        // ── Look up ONE customer by phone (autofill everywhere) ──
+        if (isset($_GET['phone'])) {
+            $phone  = normPhone($_GET['phone']);
+            $client = $phone !== '' ? findCustomerByPhone($conn, $phone, $branch_id) : null;
+            echo json_encode([
+                'success' => true,
+                'found'   => (bool) $client,
+                'client'  => $client ? customerWithFallbacks($conn, $client) : null,
+            ]);
+            break;
+        }
+
         if (!empty($_GET['invoice_no'])) {
             $invoice_no = $_GET['invoice_no'];
 
@@ -132,7 +199,7 @@ switch ($method) {
                   FROM invoices
                  WHERE client_id = ?
                     OR (client_id IS NULL AND ? <> ''
-                        AND RIGHT(REGEXP_REPLACE(COALESCE(buyer_phone,''), '[^0-9]', ''), 10) = ?)
+                        AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)
                  ORDER BY invoice_date DESC, id DESC
             ");
             $clientPhone = normPhone($client['phone'] ?? '');
@@ -154,6 +221,21 @@ switch ($method) {
             $total_billed = (float) array_sum(array_column($invoices, 'net_amount'));
             $total_paid   = (float) array_sum(array_column($payments, 'amount'));
             $they_owe     = $total_billed - $total_paid;
+
+            // ---- Quotations for this customer (phone first, then name)
+            $qPhone = normPhone($client['phone'] ?? '');
+            $qName  = trim($client['name'] ?? '');
+            $qStmt  = $conn->prepare("
+                SELECT id, quote_no, quote_date, client_name, client_phone, branch_id
+                  FROM quotations
+                 WHERE (? <> '' AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(client_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)
+                    OR (LOWER(TRIM(client_name)) = LOWER(TRIM(?)))
+                 ORDER BY quote_date DESC, id DESC
+            ");
+            $qStmt->bind_param('sss', $qPhone, $qPhone, $qName);
+            $qStmt->execute();
+            $quotations = $qStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+            $qStmt->close();
 
             // ---- SECTION 2: PURCHASES -----------------------
             $purchases = purchaseBillsForClient($conn, $client, $branch_id);
@@ -181,6 +263,7 @@ switch ($method) {
                 'client'  => $client,
 
                 'invoices'        => $invoices,
+                'quotations'      => $quotations,
                 'payments'        => $payments,
                 'total_billed'    => round($total_billed, 2),
                 'total_paid'      => round($total_paid, 2),
@@ -206,12 +289,15 @@ switch ($method) {
         //    state / state_code come from the client's latest invoice
         $listSql = "
             SELECT c.id, c.name, c.phone, c.address, c.gst, c.created_at,
-                   (SELECT i2.buyer_state FROM invoices i2
-                     WHERE i2.client_id = c.id AND COALESCE(i2.buyer_state,'') <> ''
-                     ORDER BY i2.id DESC LIMIT 1) AS state,
-                   (SELECT i3.buyer_state_code FROM invoices i3
-                     WHERE i3.client_id = c.id AND COALESCE(i3.buyer_state_code,'') <> ''
-                     ORDER BY i3.id DESC LIMIT 1) AS state_code,
+                   c.email, c.city, c.pincode,
+                   COALESCE(NULLIF(c.state,''),
+                     (SELECT i2.buyer_state FROM invoices i2
+                       WHERE i2.client_id = c.id AND COALESCE(i2.buyer_state,'') <> ''
+                       ORDER BY i2.id DESC LIMIT 1)) AS state,
+                   COALESCE(NULLIF(c.state_code,''),
+                     (SELECT i3.buyer_state_code FROM invoices i3
+                       WHERE i3.client_id = c.id AND COALESCE(i3.buyer_state_code,'') <> ''
+                       ORDER BY i3.id DESC LIMIT 1)) AS state_code,
                    COUNT(i.id)          AS total_invoices,
                    MAX(i.invoice_date)  AS last_invoice_date,
                    MAX(i.invoice_no)    AS last_invoice_no,
@@ -224,8 +310,8 @@ switch ($method) {
               LEFT JOIN invoices i
                      ON i.client_id = c.id
                      OR (i.client_id IS NULL AND COALESCE(c.phone,'') <> ''
-                         AND CONVERT(RIGHT(REGEXP_REPLACE(COALESCE(i.buyer_phone,''), '[^0-9]', ''), 10) USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                           = CONVERT(RIGHT(REGEXP_REPLACE(COALESCE(c.phone,''), '[^0-9]', ''), 10) USING utf8mb4) COLLATE utf8mb4_unicode_ci)
+                         AND CONVERT(RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(i.buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                           = CONVERT(RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(c.phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) USING utf8mb4) COLLATE utf8mb4_unicode_ci)
         ";
 
         if ($branch_id !== null) {
@@ -287,6 +373,98 @@ switch ($method) {
     // ----------------------------------------------------------
     case 'POST':
         $data = json_decode(file_get_contents('php://input'), true);
+
+        // ---- Add / update a customer (central customer DB) --
+        if (($_GET['action'] ?? '') === 'save_customer') {
+            $name = trim($data['name'] ?? '');
+            if ($name === '') {
+                http_response_code(422);
+                echo json_encode(['success' => false, 'message' => 'Customer name is required']);
+                exit;
+            }
+            $phone      = normPhone($data['phone'] ?? '');
+            $address    = trim($data['address'] ?? '');
+            $gst        = trim($data['gst'] ?? '');
+            $email      = trim($data['email'] ?? '');
+            $city       = trim($data['city'] ?? '');
+            $state      = trim($data['state'] ?? '');
+            $state_code = trim($data['state_code'] ?? '');
+            $pincode    = trim($data['pincode'] ?? '');
+
+            // Same phone = same customer → update instead of adding a duplicate
+            $existing = $phone !== '' ? findCustomerByPhone($conn, $phone, $branch_id) : null;
+            if (!$existing && !empty($data['client_id'])) {
+                $cid = (int) $data['client_id'];
+                $st  = $conn->prepare("SELECT * FROM clients WHERE id = ?");
+                $st->bind_param('i', $cid);
+                $st->execute();
+                $existing = $st->get_result()->fetch_assoc() ?: null;
+                $st->close();
+            }
+
+            if ($existing) {
+                // Blank fields keep whatever is already saved
+                $keep = function ($new, $old) { return $new !== '' ? $new : (string) ($old ?? ''); };
+                $address    = $keep($address,    $existing['address']);
+                $gst        = $keep($gst,        $existing['gst']);
+                $email      = $keep($email,      $existing['email'] ?? '');
+                $city       = $keep($city,       $existing['city'] ?? '');
+                $state      = $keep($state,      $existing['state'] ?? '');
+                $state_code = $keep($state_code, $existing['state_code'] ?? '');
+                $pincode    = $keep($pincode,    $existing['pincode'] ?? '');
+                $phone      = $keep($phone,      $existing['phone']);
+
+                $st = $conn->prepare(
+                    "UPDATE clients
+                        SET name=?, phone=?, address=?, gst=?, email=?, city=?, state=?, state_code=?, pincode=?
+                      WHERE id=?"
+                );
+                $st->bind_param('sssssssssi', $name, $phone, $address, $gst, $email,
+                    $city, $state, $state_code, $pincode, $existing['id']);
+                $st->execute();
+                $st->close();
+                $client_id = (int) $existing['id'];
+                $msg = 'Customer updated';
+            } else {
+                $st = $conn->prepare(
+                    "INSERT INTO clients (name, phone, address, gst, email, city, state, state_code, pincode, branch_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                );
+                $st->bind_param('sssssssssi', $name, $phone, $address, $gst, $email,
+                    $city, $state, $state_code, $pincode, $branch_id);
+                $st->execute();
+                $client_id = (int) $conn->insert_id;
+                $st->close();
+                $msg = 'Customer added';
+            }
+
+            // Link this customer's existing bills/invoices by phone
+            if ($phone !== '') {
+                foreach ([
+                    "UPDATE purchase_bills SET client_id = ? WHERE client_id IS NULL AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?",
+                    "UPDATE invoices SET client_id = ? WHERE client_id IS NULL AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?",
+                ] as $sql) {
+                    $lk = $conn->prepare($sql);
+                    $lk->bind_param('is', $client_id, $phone);
+                    $lk->execute();
+                    $lk->close();
+                }
+            }
+
+            $st = $conn->prepare("SELECT * FROM clients WHERE id = ?");
+            $st->bind_param('i', $client_id);
+            $st->execute();
+            $saved = $st->get_result()->fetch_assoc();
+            $st->close();
+
+            echo json_encode([
+                'success'   => true,
+                'message'   => $msg,
+                'client_id' => $client_id,
+                'client'    => customerWithFallbacks($conn, $saved),
+            ]);
+            break;
+        }
 
         // ---- Settle what WE owe (cash or product) -----------
         if (($_GET['action'] ?? '') === 'settle') {
@@ -453,8 +631,19 @@ switch ($method) {
         $address   = trim($data['address'] ?? '');
         $gst       = trim($data['gst'] ?? '');
 
-        $stmt = $conn->prepare("UPDATE clients SET name=?, phone=?, address=?, gst=? WHERE id=?");
-        $stmt->bind_param('ssssi', $name, $phone, $address, $gst, $client_id);
+        $email      = trim($data['email'] ?? '');
+        $city       = trim($data['city'] ?? '');
+        $state      = trim($data['state'] ?? '');
+        $state_code = trim($data['state_code'] ?? '');
+        $pincode    = trim($data['pincode'] ?? '');
+
+        $stmt = $conn->prepare(
+            "UPDATE clients
+                SET name=?, phone=?, address=?, gst=?, email=?, city=?, state=?, state_code=?, pincode=?
+              WHERE id=?"
+        );
+        $stmt->bind_param('sssssssssi', $name, $phone, $address, $gst, $email,
+            $city, $state, $state_code, $pincode, $client_id);
 
         if (!$stmt->execute()) {
             http_response_code(500);
@@ -467,7 +656,7 @@ switch ($method) {
             $link = $conn->prepare("
                 UPDATE purchase_bills
                    SET client_id = ?
-                 WHERE REGEXP_REPLACE(COALESCE(supplier_phone,''), '[^0-9]', '') = ?
+                 WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?
             ");
             $link->bind_param('is', $client_id, $phone);
             $link->execute();
