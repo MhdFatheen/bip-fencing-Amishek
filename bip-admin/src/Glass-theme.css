@@ -1,0 +1,80 @@
+/* ═══════════════════════════════════════════════════════════
+   GLASS UI THEME — visual only (no layout / logic changes).
+   Soft gradient backdrop (no photo) + frosted panels.
+   To switch off: remove the import of this file in main.jsx.
+═══════════════════════════════════════════════════════════ */
+body {
+  background:
+    radial-gradient(900px 600px at 8% 0%,   rgba(16,185,129,.30), transparent 60%),
+    radial-gradient(800px 600px at 100% 10%, rgba(59,130,246,.26), transparent 60%),
+    radial-gradient(900px 700px at 70% 100%, rgba(236,72,153,.16), transparent 60%),
+    radial-gradient(700px 500px at 0% 100%,  rgba(6,182,212,.20), transparent 60%),
+    #eaf3f1 !important;
+  background-attachment: fixed !important;
+}
+
+/* ── Sidebar ── */
+body .sidebar {
+  background: linear-gradient(180deg, rgba(8,40,26,.72), rgba(8,28,24,.62)) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  border-right: 1px solid rgba(255,255,255,.18) !important;
+  box-shadow: 8px 0 32px rgba(0,40,30,.18);
+}
+body .sidebar::after { opacity: .5; }
+body .sb-brand { background: rgba(255,255,255,.04) !important; border-bottom: 1px solid rgba(255,255,255,.12) !important; }
+body .nav-item-link { color: rgba(255,255,255,.72); border-radius: 12px; margin: 2px 8px; width: calc(100% - 16px); }
+body .nav-item-link:hover { background: rgba(255,255,255,.12); color: #fff; }
+body .nav-item-link.active { background: rgba(255,255,255,.18); color: #7dffb0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.22); }
+body .sb-section { color: rgba(125,255,176,.75); }
+body .sb-stats { background: rgba(255,255,255,.08) !important; border: 1px solid rgba(255,255,255,.18) !important; border-radius: 14px; }
+
+/* ── Topbar ── */
+body .tb-root {
+  background: rgba(255,255,255,.45) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  backdrop-filter: blur(16px) saturate(170%);
+  border-bottom: 1px solid rgba(255,255,255,.6) !important;
+  box-shadow: 0 4px 24px rgba(15,60,50,.08);
+}
+body .tb-branch,
+body .tb-dropdown__trigger,
+body .tb-menu-btn {
+  background: rgba(255,255,255,.55) !important;
+  border: 1px solid rgba(255,255,255,.75) !important;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+/* ── Dashboard ── */
+body .dashboard-container { background: transparent !important; }
+body .dashboard-title { color: #0f2a22; }
+body .dashboard-subtitle { color: #3f5a52; }
+
+/* stat cards: colour stays, becomes frosted */
+body .stat-card {
+  position: relative; overflow: hidden;
+  border: 1px solid rgba(255,255,255,.45);
+  box-shadow: 0 10px 30px rgba(15,60,50,.16), inset 0 1px 0 rgba(255,255,255,.45);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+body .stat-card::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(145deg, rgba(255,255,255,.28), rgba(255,255,255,0) 55%);
+}
+body .stat-card > * { position: relative; }
+
+/* white panels → frosted glass */
+body .chart-section,
+body .recent-card,
+body .info-card,
+body .quote-summary {
+  background: rgba(255,255,255,.42) !important;
+  border: 1px solid rgba(255,255,255,.7);
+  box-shadow: 0 10px 32px rgba(15,60,50,.10), inset 0 1px 0 rgba(255,255,255,.8);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  backdrop-filter: blur(16px) saturate(160%);
+}
+body .section-header { border-bottom-color: rgba(255,255,255,.7); }
+body .section-badge { background: rgba(255,255,255,.6); }

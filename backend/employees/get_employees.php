@@ -15,10 +15,29 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 
 $db = getDB();
 
-// ✅ SIMPLE MODE (for dropdowns) – now includes salary_type
+// Detect which columns really exist (DB was migrated: phone_number -> whatsapp_number, etc.)
+$cols = [];
+$res = $db->query("SHOW COLUMNS FROM employees");
+while ($c = $res->fetch_assoc()) $cols[$c['Field']] = true;
+$phoneCol = isset($cols['whatsapp_number']) ? 'whatsapp_number' : (isset($cols['phone_number']) ? 'phone_number' : null);
+
+// Branch id -> name map (added to every employee row as branch_name)
+$branchNames = [];
+$bc = [];
+$r = $db->query("SHOW COLUMNS FROM branches");
+while ($c = $r->fetch_assoc()) $bc[$c['Field']] = true;
+$bcol = isset($bc['name']) ? 'name' : 'branch_name';
+$r = $db->query("SELECT id, `$bcol` AS n FROM branches");
+while ($b = $r->fetch_assoc()) $branchNames[$b['id']] = $b['n'];
+$withBranch = function (array $rows) use ($branchNames) {
+    foreach ($rows as &$row) $row['branch_name'] = $branchNames[$row['branch_id'] ?? 0] ?? '';
+    return $rows;
+};
+
+// ✅ SIMPLE MODE (for dropdowns)
 if (isset($_GET['simple']) && $_GET['simple'] == 1) {
     list($whereClause, $branchParams) = branchFilter($authUser);
-    $sql = "SELECT id, employee_name, emp_id, salary_type FROM employees $whereClause ORDER BY employee_name ASC";
+    $sql = "SELECT * FROM employees $whereClause ORDER BY employee_name ASC";
     $stmt = $db->prepare($sql);
     if ($branchParams) {
         $types = str_repeat('i', count($branchParams));
@@ -26,7 +45,7 @@ if (isset($_GET['simple']) && $_GET['simple'] == 1) {
     }
     $stmt->execute();
     $employees = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    echo json_encode($employees);
+    echo json_encode($withBranch($employees));
     $stmt->close();
     $db->close();
     exit;
@@ -36,7 +55,7 @@ if (isset($_GET['simple']) && $_GET['simple'] == 1) {
 $search_name   = isset($_GET['name']) ? trim($_GET['name']) : '';
 $search_emp_id = isset($_GET['emp_id']) ? trim($_GET['emp_id']) : '';
 $search_salary = isset($_GET['salary_type']) ? trim($_GET['salary_type']) : '';
-$search_phone  = isset($_GET['phone']) ? trim($_GET['phone']) : '';
+$search_phone  = trim($_GET['phone'] ?? $_GET['whatsapp'] ?? $_GET['whatsapp_number'] ?? '');
 $date_from     = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to       = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 $page          = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
@@ -48,20 +67,20 @@ list($whereClause, $branchParams) = branchFilter($authUser);
 // Build additional filters
 $filters = [];
 $filterParams = [];
-if (!empty($search_name)) {
+if ($search_name !== '') {
     $filters[] = "employee_name LIKE ?";
     $filterParams[] = "%$search_name%";
 }
-if (!empty($search_emp_id)) {
+if ($search_emp_id !== '' && isset($cols['emp_id'])) {
     $filters[] = "emp_id LIKE ?";
     $filterParams[] = "%$search_emp_id%";
 }
-if (!empty($search_salary)) {
+if ($search_salary !== '') {
     $filters[] = "salary_type = ?";
     $filterParams[] = $search_salary;
 }
-if (!empty($search_phone)) {
-    $filters[] = "phone_number LIKE ?";
+if ($search_phone !== '' && $phoneCol) {
+    $filters[] = "$phoneCol LIKE ?";
     $filterParams[] = "%$search_phone%";
 }
 if (!empty($date_from)) {
@@ -74,47 +93,34 @@ if (!empty($date_to)) {
 }
 
 // Combine WHERE
-$where = '';
-if (!empty($whereClause)) {
-    $where = $whereClause;
-    if (!empty($filters)) {
-        $where .= ' AND ' . implode(' AND ', $filters);
-    }
-} else {
-    if (!empty($filters)) {
-        $where = 'WHERE ' . implode(' AND ', $filters);
-    }
+$where = $whereClause;
+if ($filters) {
+    $where .= ($where ? ' AND ' : 'WHERE ') . implode(' AND ', $filters);
 }
 
 // Total count for pagination
-$countSql = "SELECT COUNT(*) as total FROM employees $where";
-$countStmt = $db->prepare($countSql);
+$countStmt = $db->prepare("SELECT COUNT(*) as total FROM employees $where");
 $allParams = array_merge($branchParams, $filterParams);
-if (!empty($allParams)) {
-    $types = str_repeat('s', count($allParams));
-    $countStmt->bind_param($types, ...$allParams);
+if ($allParams) {
+    $countStmt->bind_param(str_repeat('s', count($allParams)), ...$allParams);
 }
 $countStmt->execute();
-$total = $countStmt->get_result()->fetch_assoc()['total'];
+$total = (int)$countStmt->get_result()->fetch_assoc()['total'];
 $countStmt->close();
 
 // Main query
-$sql = "SELECT id, employee_name, emp_id, department, destination, gender, email, phone_number, address, salary_type, date_of_joining, created_at 
-        FROM employees $where ORDER BY created_at DESC LIMIT ? OFFSET ?";
-$stmt = $db->prepare($sql);
+$stmt = $db->prepare("SELECT * FROM employees $where ORDER BY created_at DESC LIMIT ? OFFSET ?");
 $bindParams = array_merge($branchParams, $filterParams, [$limit, $offset]);
-$types = str_repeat('s', count($bindParams) - 2) . 'ii';
-$stmt->bind_param($types, ...$bindParams);
+$stmt->bind_param(str_repeat('s', count($bindParams) - 2) . 'ii', ...$bindParams);
 $stmt->execute();
 $employees = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 echo json_encode([
-    'data' => $employees,
-    'total' => $total,
-    'page' => $page,
-    'limit' => $limit,
-    'total_pages' => ceil($total / $limit)
+    'data'        => $withBranch($employees),
+    'total'       => $total,
+    'page'        => $page,
+    'limit'       => $limit,
+    'total_pages' => (int)ceil($total / $limit)
 ]);
 $stmt->close();
 $db->close();
-?>

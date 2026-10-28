@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/api";
+import PhoneInput from "../components/PhoneInput";
+import SignedAmountInput from "../components/SignedAmountInput";
+import SharePrompt, { shareImage } from "../components/SharePrompt";
 import { BRANCH_LABELS } from "../utils/branchNames";
 
 // ─── COMPANY & BANK DETAILS ──────────────────────────────────────────────────
@@ -18,7 +21,7 @@ const DEFAULT_BANK = {
   bankName: "CANARA BANK",
   accountNo: "120017946948",
   ifsc: "CNRB0003657",
-  branch: "THERKU VALLIOOR",
+  branch: "THERKU Kadambankulam",
 };
 
 const DECLARATION =
@@ -295,6 +298,7 @@ const calcTotals = (items, discount, tax, manualRound) => {
 
 // ─── MAIN COMPONENT ─────────────────────────────────────────────────────────
 export default function Quotation() {
+  const [pendingShare, setPendingShare] = useState(null); // WhatsApp share waiting for a tap
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -711,7 +715,7 @@ export default function Quotation() {
     const actionBar = (extra) => (
       <div
         className="qt-no-print"
-        style={{ display: "flex", justifyContent: "center", gap: 12, ...extra }}
+        style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12, padding: "0 12px", ...extra }}
       >
         <button onClick={() => setView("table")} style={topBtn}>
           ← Back to List
@@ -737,19 +741,46 @@ export default function Quotation() {
       cursor: "pointer",
     };
 
+    // Full quotation details (same figures as the preview)
+    const quotationText = () => {
+      const m = (n) => `₹${fmt2(n)}`;
+      const L = [`*BIP FENCING — Quotation ${d.quote_no}*`, `Date: ${d.quote_date || "-"}`,
+        `Customer: ${d.client_name || "-"}`];
+      const ph = String(d.client_phone || "").replace(/\D/g, "").slice(-10);
+      if (ph) L.push(`Phone: +91 ${ph}`);
+      L.push("", "*Items*");
+      rows.forEach((r, i) =>
+        L.push(`${i + 1}. ${r.description || r.product_name || "-"} — ${r.qty} × ${m(r.rate)} = ${m(r.qty * r.rate)}`),
+      );
+      L.push("");
+      if (disc) L.push(`Discount: ${disc}%`);
+      L.push(`Taxable Value: ${m(taxable)}`);
+      if (totalTax) L.push(`GST (${tax}%): ${m(totalTax)}`);
+      if (roundOff) L.push(`Round Off: ${roundOff > 0 ? "+" : "-"}${m(Math.abs(roundOff))}`);
+      L.push(`*Grand Total: ${m(netAmount)}*`, "", "Thank you,", "BIP Fencing");
+      return L.join("\n");
+    };
+
     const sendWhatsApp = async (d) => {
-      const phone = (d.client_phone || "").replace(/\D/g, "");
-      const html2canvas = (await import("html2canvas")).default;
-      const node = document.getElementById("qt-print-area");
-      const canvas = await html2canvas(node, { scale: 2 });
-      canvas.toBlob(async (blob) => {
-        const file = new File([blob], `${d.quote_no}.png`, { type: "image/png" });
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], text: `Quotation ${d.quote_no}` });
-        } else {
-          window.open(`https://wa.me/${phone}?text=Quotation ${d.quote_no}`, "_blank");
-        }
-      });
+      try {
+        const html2canvas = (await import("html2canvas")).default;
+        const node = document.getElementById("qt-print-area");
+        const canvas = await html2canvas(node, {
+          scale: 2,
+          backgroundColor: "#fff",
+          windowWidth: node.scrollWidth + 40,
+          onclone: (doc) =>
+            doc.querySelectorAll(".qt-preview-scroll").forEach((n) => (n.style.overflow = "visible")),
+        });
+        const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+        if (!blob) throw new Error("no image");
+        const job = { blob, fileName: `${d.quote_no}.png`, phone: d.client_phone, text: quotationText() };
+        const result = await shareImage(job);
+        if (result === "needs-tap") setPendingShare(job);
+      } catch (err) {
+        console.error(err);
+        alert("Could not prepare the quotation for WhatsApp.");
+      }
     };
 
     const uq = Number(d.unit_qty ?? 0);
@@ -758,9 +789,17 @@ export default function Quotation() {
     return (
       <>
         <style>{PRINT_STYLES}</style>
+        <style>{`
+          @media screen and (max-width: 900px) {
+            .qt-preview-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0 6px; }
+          }
+          @media print { .qt-preview-scroll { overflow: visible !important; padding: 0 !important; } }
+        `}</style>
+        <SharePrompt pending={pendingShare} onClose={() => setPendingShare(null)} />
 
         {actionBar({ padding: "16px 0", background: "#f6f8fa" })}
 
+        <div className="qt-preview-scroll">
         <div
           id="qt-print-area"
           style={{
@@ -1115,6 +1154,7 @@ export default function Quotation() {
             </table>
           </div>
         </div>
+        </div>
 
         {actionBar({ paddingBottom: 30 })}
       </>
@@ -1229,6 +1269,14 @@ export default function Quotation() {
                               onClick={() => handleViewBill(rec)}
                             >
                               <i className="bi bi-eye"></i> View
+                            </button>
+                            <button
+                              className="at-btn at-btn--ghost"
+                              style={{ padding: "6px 12px", fontSize: 12 }}
+                              title="Statement of this quotation"
+                              onClick={() => navigate(`/statements?type=quotation&quotation_id=${rec.id}`)}
+                            >
+                              <i className="bi bi-journal-text"></i> Statement
                             </button>
                             <button
                               className="at-btn at-btn--ghost"
@@ -1468,7 +1516,7 @@ export default function Quotation() {
               </div>
               <div className="at-fg">
                 <label className="at-label">Phone</label>
-                <input
+                <PhoneInput
                   name="clientPhone"
                   value={form.clientPhone}
                   onChange={(e) => {
@@ -1685,17 +1733,14 @@ export default function Quotation() {
                   style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}
                 >
                   <span>Round Off:</span>
-                  <input
-                    type="number"
-                    step="any"
+                  <SignedAmountInput
                     className="at-input"
-                    style={{ width: 120, height: 30, textAlign: "right" }}
+                    style={{ width: 160, height: 30 }}
                     placeholder={`auto (${T.roundOff >= 0 ? "+" : ""}${fmt2(
                       Math.round(T.taxable + T.taxAmt) - (T.taxable + T.taxAmt),
                     )})`}
                     value={form.manualRoundOff}
                     onChange={(e) => setForm((p) => ({ ...p, manualRoundOff: e.target.value }))}
-                    onWheel={(e) => e.target.blur()}
                   />
                 </div>
                 <div className="net">Grand Total: ₹ {fmt2(T.grandTotal)}</div>

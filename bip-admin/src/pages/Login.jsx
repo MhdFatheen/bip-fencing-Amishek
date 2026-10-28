@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo.jpeg";
+// Background photo: replace src/assets/login-bg.jpg with any photo (1920px wide or more looks best)
+import loginBg from "../assets/login-bg.jpg";
 
 const LOGO_SRC = "/logo.jpeg";
 const API_BASE = "http://localhost:8000";
@@ -362,9 +364,82 @@ export default function Login() {
           .lg-right { padding: 24px 18px; }
           .lg-left { padding: 24px 18px 16px; }
         }
+
+        /* ══════════════════════════════════════════
+           GLASS UI over the fencing-products scene
+           (visual only — form logic is unchanged)
+        ══════════════════════════════════════════ */
+        .lg-page { background-size: cover; background-position: center; background-repeat: no-repeat; }
+        .lg-page::before { display: none; }
+
+        .lg-card {
+          background: rgba(255,255,255,.07);
+          -webkit-backdrop-filter: blur(3px) saturate(160%);
+          backdrop-filter: blur(3px) saturate(160%);
+          border: 1px solid rgba(255,255,255,.28);
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.35),
+            0 30px 80px rgba(0,0,0,.55),
+            0 8px 28px rgba(0,0,0,.35);
+        }
+        .lg-left {
+          background: linear-gradient(155deg, rgba(8,34,18,.55) 0%, rgba(8,34,18,.30) 80%);
+          border-right: 1px solid rgba(255,255,255,.16);
+        }
+        .lg-left::before { opacity: .15; }
+        .lg-right {
+          background: rgba(10,40,22,.22);
+          -webkit-backdrop-filter: blur(1px);
+          backdrop-filter: blur(1px);
+        }
+        .lg-right::before { display: none; }
+
+        .lg-fh__eyebrow { color: #7dffb0; }
+        .lg-fh__title { color: #fff; text-shadow: 0 1px 12px rgba(0,0,0,.35); }
+        .lg-fh__sub { color: rgba(255,255,255,.72); }
+
+        .lg-group {
+          background: rgba(255,255,255,.14);
+          border-color: rgba(255,255,255,.35);
+        }
+        .lg-group:focus-within {
+          border-color: #5dffa0;
+          box-shadow: 0 0 0 3px rgba(93,255,160,.22);
+        }
+        .lg-field { background: transparent; border-bottom-color: rgba(255,255,255,.22); }
+        .lg-field__lbl { color: rgba(255,255,255,.7); }
+        .lg-field__icon { color: rgba(255,255,255,.75); }
+        .lg-inp { color: #fff; }
+        .lg-inp::placeholder { color: rgba(255,255,255,.4); }
+        .lg-eye { color: rgba(255,255,255,.7); }
+        .lg-eye:hover { color: #7dffb0; }
+        .lg-inp:-webkit-autofill {
+          -webkit-text-fill-color: #fff;
+          transition: background-color 9999s ease-out 0s;
+        }
+        .lg-sep__line { background: rgba(255,255,255,.2); }
+        .lg-desc { color: rgba(255,255,255,.88); text-shadow: 0 1px 8px rgba(0,0,0,.45); }
+        .lg-feat { color: rgba(255,255,255,.92); }
+        .lg-stat__lbl { color: rgba(255,255,255,.7); }
+        .lg-copy { color: rgba(255,255,255,.55); }
+        .lg-alert { background: rgba(254,226,226,.92); }
+
+        /* Logo image fills its box */
+        .lg-fh__logobox { width: 110px; height: 110px; border-radius: 18px; background: transparent; }
+        .lg-fh__logoimg { width: 100%; height: 100%; object-fit: cover; transform: scale(1.12); }
+        /* Centered sign-in only (left info panel hidden) */
+        .lg-left { display: none; }
+        .lg-card {
+          grid-template-columns: 1fr;
+          width: calc(100vw - 40px);
+          max-width: 460px;
+          height: auto; max-height: none; min-height: 0;
+        }
+        .lg-right { padding: 40px 36px; }
+        @media (max-width: 420px) { .lg-right { padding: 28px 18px; } }
       `}</style>
 
-      <div className="lg-page">
+      <div className="lg-page" style={{ backgroundImage: `linear-gradient(rgba(4,22,10,.30), rgba(4,22,10,.50)), url(${loginBg})` }}>
         <div className="lg-card">
           {/* ════ LEFT ════ */}
           <div className="lg-left">

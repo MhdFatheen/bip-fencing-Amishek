@@ -182,6 +182,15 @@ export default function Sidebar() {
             <i className="bi bi-box-seam"></i>
             <span>Products</span>
           </NavLink>
+          <NavLink
+            to="/purchase-catalog"
+            className={({ isActive }) =>
+              `nav-item-link nav-sub${isActive ? " active" : ""}`
+            }
+          >
+            <i className="bi bi-bag-check"></i>
+            <span>Purchase Catalog</span>
+          </NavLink>
         </DropdownItem>
 
         <div className="sb-section">HR</div>
@@ -220,6 +229,20 @@ export default function Sidebar() {
             <span>Salary &amp; Attendance</span>
           </NavLink>
         </DropdownItem>
+
+        <div className="sb-section">Reports</div>
+        <NavLink
+          to="/statements"
+          onClick={handleSubNavClick}
+          className={({ isActive }) =>
+            `nav-item-link${isActive ? " active" : ""}`
+          }
+        >
+          <div className="nav-icon-wrap">
+            <i className="bi bi-journal-text"></i>
+          </div>
+          <span>Statements</span>
+        </NavLink>
 
         {role === "admin" && (
           <>

@@ -121,6 +121,44 @@ function pbApplyStock(mysqli $conn, array $items, ?int $branchId, int $sign): vo
     $sel->close(); $upd->close(); $ins->close();
 }
 
+// Product identity = Product ID + Product Name. The typed code (HSN / code) is only
+// an attribute: two DIFFERENT products may share the same code, so they must not be
+// merged into one stock row. Returns the product_id to store/use for this item:
+//   1) this id already belongs to this product name        -> that id
+//   2) this product name already lives under a derived id  -> e.g. "1234-2"
+//   3) the id is unused                                     -> the id as typed
+//   4) the id belongs to another product                    -> next free "<id>-N"
+function pbResolveProductId(mysqli $conn, string $pid, string $name): string {
+    $key = mb_strtolower(trim($name));
+    $one = function (string $sql, string $types, array $params) use ($conn) {
+        $st = $conn->prepare($sql);
+        $st->bind_param($types, ...$params);
+        $st->execute();
+        $row = $st->get_result()->fetch_assoc();
+        $st->close();
+        return $row;
+    };
+
+    if ($one("SELECT product_id FROM purchase_stock WHERE product_id = ? AND LOWER(TRIM(product_name)) = ? LIMIT 1",
+             'ss', [$pid, $key])) {
+        return $pid;
+    }
+    $like = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $pid) . '-%';
+    if ($r = $one("SELECT product_id FROM purchase_stock WHERE LOWER(TRIM(product_name)) = ? AND product_id LIKE ? LIMIT 1",
+                  'ss', [$key, $like])) {
+        return $r['product_id'];
+    }
+    if (!$one("SELECT 1 AS x FROM purchase_stock WHERE product_id = ? LIMIT 1", 's', [$pid])) {
+        return $pid;
+    }
+    for ($n = 2; $n < 1000; $n++) {
+        $cand = $pid . '-' . $n;
+        $r = $one("SELECT product_name FROM purchase_stock WHERE product_id = ? LIMIT 1", 's', [$cand]);
+        if (!$r || mb_strtolower(trim($r['product_name'])) === $key) return $cand;
+    }
+    return $pid;
+}
+
 function pbEnsurePaymentsTable(mysqli $conn): void {
     $conn->query("
         CREATE TABLE IF NOT EXISTS purchase_bill_payments (

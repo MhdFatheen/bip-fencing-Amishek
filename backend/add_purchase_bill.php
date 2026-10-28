@@ -150,8 +150,9 @@ try {
     );
 
     foreach ($cleanItems as $item) {
-        $pid    = $item['product_id'];
         $pname  = $item['product_name'];
+        // same code but different product name = a different product (see purchase_common.php)
+        $pid    = pbResolveProductId($conn, $item['product_id'], $pname);
         $qty    = $item['quantity'];
         $rate   = $item['rate'];
         $amount = $item['amount'];

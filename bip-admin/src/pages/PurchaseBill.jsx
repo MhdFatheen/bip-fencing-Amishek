@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/api";
+import PhoneInput from "../components/PhoneInput";
 import { branchLabel } from "../utils/branchNames";
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -56,6 +58,7 @@ const getStoredUser = () => {
 };
 
 export default function PurchaseBill() {
+  const navigate = useNavigate();
   const storedUser = getStoredUser();
   const isAdmin = storedUser?.role === "admin";
 
@@ -183,6 +186,79 @@ export default function PurchaseBill() {
     };
     setFilters(cleared);
     fetchBills(cleared);
+  };
+
+  // ── View Statement (reuses the existing Statements page) ─────
+  // Statement of exactly this purchase bill (supplier, items, qty, amounts, paid, balance)
+  const statementUrlFor = (bill) =>
+    `/statements?type=purchase&bill_id=${bill.id}&ref=${encodeURIComponent(
+      bill.invoice_no || "PB-" + bill.id,
+    )}`;
+  // Open in a new tab so an unsaved bill form is never lost
+  const openStatement = (url) => window.open(url, "_blank", "noopener");
+
+  // ── Company Name autocomplete (type-to-search) ─────────────
+  const [companyOpen, setCompanyOpen] = useState(false);
+  const [companyIdx, setCompanyIdx] = useState(-1);
+
+  // Known companies: customers/parties + names used in earlier purchase bills (de-duplicated)
+  const companyOptions = React.useMemo(() => {
+    const map = new Map();
+    const add = (name, phone) => {
+      const n = String(name || "").trim();
+      if (!n) return;
+      const k = n.toLowerCase();
+      const cur = map.get(k);
+      if (!cur) map.set(k, { name: n, phone: phone || "" });
+      else if (!cur.phone && phone) cur.phone = phone;
+    };
+    parties.forEach((p) => add(p.name, p.phone));
+    bills.forEach((b) => add(b.company_name, b.supplier_phone));
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [parties, bills]);
+
+  const companyMatches = React.useMemo(() => {
+    const q = form.company_name.trim().toLowerCase();
+    if (!q) return companyOptions.slice(0, 50);
+    const starts = [];
+    const contains = [];
+    companyOptions.forEach((o) => {
+      const n = o.name.toLowerCase();
+      if (n.startsWith(q)) starts.push(o);
+      else if (n.includes(q)) contains.push(o);
+    });
+    return [...starts, ...contains].slice(0, 50);
+  }, [form.company_name, companyOptions]);
+
+  const pickCompany = (opt) => {
+    // Same autofill as before: fill the phone only when it is still empty
+    setForm((prev) => ({
+      ...prev,
+      company_name: opt.name,
+      supplier_phone: prev.supplier_phone || opt.phone || "",
+    }));
+    setCompanyOpen(false);
+    setCompanyIdx(-1);
+  };
+
+  const handleCompanyKeyDown = (e) => {
+    if (!companyOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      setCompanyOpen(true);
+      return;
+    }
+    if (!companyOpen || !companyMatches.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setCompanyIdx((i) => (i + 1) % companyMatches.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setCompanyIdx((i) => (i <= 0 ? companyMatches.length - 1 : i - 1));
+    } else if (e.key === "Enter" && companyIdx >= 0) {
+      e.preventDefault();
+      pickCompany(companyMatches[companyIdx]);
+    } else if (e.key === "Escape") {
+      setCompanyOpen(false);
+    }
   };
 
   // ── Form field handlers ───────────────────────────────────
@@ -451,6 +527,13 @@ export default function PurchaseBill() {
       }}
     >
       <style>{screenStyles}</style>
+      <style>{`
+        .co-ac { position: relative; }
+        .co-ac-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 50; margin: 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #d1d5db; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); max-height: 240px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+        .co-ac-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #111827; }
+        .co-ac-item small { color: #6b7280; font-size: 12px; white-space: nowrap; }
+        .co-ac-item:hover, .co-ac-item.active { background: #e8f7ee; }
+      `}</style>
 
       {/* ── Header ───────────────────────────────────────────── */}
       <div className="at-header">
@@ -465,6 +548,14 @@ export default function PurchaseBill() {
             </p>
           </div>
         </div>
+        <button
+          type="button"
+          className="at-btn at-btn--ghost"
+          title="View purchase statement"
+          onClick={() => openStatement("/statements?type=purchase")}
+        >
+          <i className="bi bi-journal-text"></i> View Statement
+        </button>
         {!showForm && (
           <button
             type="button"
@@ -512,24 +603,51 @@ export default function PurchaseBill() {
               <label className="at-label">
                 Company Name <span className="req">*</span>
               </label>
-              <input
-                type="text"
-                name="company_name"
-                placeholder="Supplier / Company name"
-                className="at-input"
-                value={form.company_name}
-                onChange={handleHeaderChange}
-                required
-              />
+              <div className="co-ac">
+                <input
+                  type="text"
+                  name="company_name"
+                  placeholder="Supplier / Company name"
+                  className="at-input"
+                  value={form.company_name}
+                  onChange={(e) => {
+                    handleHeaderChange(e);
+                    setCompanyOpen(true);
+                    setCompanyIdx(-1);
+                  }}
+                  onFocus={() => setCompanyOpen(true)}
+                  onBlur={() => setTimeout(() => setCompanyOpen(false), 150)}
+                  onKeyDown={handleCompanyKeyDown}
+                  autoComplete="off"
+                  required
+                />
+                {companyOpen && companyMatches.length > 0 && (
+                  <ul className="co-ac-list" role="listbox">
+                    {companyMatches.map((o, i) => (
+                      <li
+                        key={o.name}
+                        role="option"
+                        className={`co-ac-item${i === companyIdx ? " active" : ""}`}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          pickCompany(o);
+                        }}
+                        onTouchStart={() => setCompanyIdx(i)}
+                      >
+                        <span>{o.name}</span>
+                        {o.phone ? <small>{o.phone}</small> : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
             <div className="at-fg">
               <label className="at-label">
                 Supplier Phone
               </label>
-              <input
-                type="tel"
+              <PhoneInput
                 name="supplier_phone"
-                placeholder="10-digit mobile number"
                 className="at-input"
                 value={form.supplier_phone}
                 onChange={handleHeaderChange}
@@ -628,7 +746,7 @@ export default function PurchaseBill() {
                       <input
                         type="text"
                         name="product_id"
-                        placeholder="HSN / Code"
+                        placeholder="Product ID / Code"
                         className="at-input-t"
                         value={item.product_id}
                         onChange={(e) => handleItemChange(idx, e)}
@@ -1114,6 +1232,15 @@ export default function PurchaseBill() {
                               GST {parseFloat(bill.gst_rate)}%
                             </span>
                           )}
+                          <button
+                            type="button"
+                            className="edit-btn"
+                            onClick={() => openStatement(statementUrlFor(bill))}
+                            title="View statement"
+                            style={{ marginLeft: "auto" }}
+                          >
+                            <i className="bi bi-journal-text"></i>
+                          </button>
                           {isAdmin && (
                             <span className="admin-actions">
                               <button

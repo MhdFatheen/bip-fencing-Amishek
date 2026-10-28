@@ -121,6 +121,34 @@ if ($method === 'POST' && $action) {
         if ($qty <= 0) respond(422, ['error' => 'Invalid quantity']);
 
         $conn->query("UPDATE products SET stock_qty = stock_qty + $qty WHERE id = $id");
+
+        // ── Log every manual stock-in so the Product Statement can show it ──
+        // Table is created once if it doesn't exist (MySQL 5.7+ / MariaDB)
+        $conn->query("
+            CREATE TABLE IF NOT EXISTS product_stock_log (
+                id          INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+                product_id  INT UNSIGNED    NOT NULL,
+                product_name VARCHAR(255)   NOT NULL DEFAULT '',
+                branch_id   INT UNSIGNED    DEFAULT NULL,
+                log_type    VARCHAR(30)     NOT NULL DEFAULT 'stock_in',
+                qty         DECIMAL(12,3)   NOT NULL DEFAULT 0,
+                note        TEXT            DEFAULT NULL,
+                logged_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY (product_id), KEY (branch_id), KEY (logged_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ");
+
+        $pname    = $row['product_name'];
+        $branchId = $row['branch_id'] ?? null;
+        $ins = $conn->prepare("
+            INSERT INTO product_stock_log (product_id, product_name, branch_id, log_type, qty, note)
+            VALUES (?, ?, ?, 'stock_in', ?, 'Manual Stock In')
+        ");
+        $ins->bind_param('isid', $id, $pname, $branchId, $qty);
+        $ins->execute();
+        $ins->close();
+
         respond(200, ['message' => 'Stock added', 'qty' => $qty]);
     }
 
@@ -220,6 +248,34 @@ if ($method === 'POST') {
         if ($bid === $branchId || !$newId) $newId = $conn->insert_id;
     }
     $result = $conn->query("SELECT * FROM products WHERE id = $newId");
+
+    // Log initial stock if > 0 so the Product Statement shows the opening stock entry
+    if ((int)$stockQty > 0) {
+        $conn->query("
+            CREATE TABLE IF NOT EXISTS product_stock_log (
+                id          INT UNSIGNED   NOT NULL AUTO_INCREMENT,
+                product_id  INT UNSIGNED   NOT NULL,
+                product_name VARCHAR(255)  NOT NULL DEFAULT '',
+                branch_id   INT UNSIGNED   DEFAULT NULL,
+                log_type    VARCHAR(30)    NOT NULL DEFAULT 'stock_in',
+                qty         DECIMAL(12,3)  NOT NULL DEFAULT 0,
+                note        TEXT           DEFAULT NULL,
+                logged_at   DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                KEY (product_id), KEY (branch_id), KEY (logged_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ");
+        $logStmt = $conn->prepare("
+            INSERT INTO product_stock_log (product_id, product_name, branch_id, log_type, qty, note)
+            VALUES (?, ?, ?, 'stock_in', ?, 'Initial Stock')
+        ");
+        foreach ($targetBranches as $bid) {
+            $logStmt->bind_param('isid', $newId, $productName, $bid, $stockQty);
+            $logStmt->execute();
+        }
+        $logStmt->close();
+    }
+
     respond(201, $result->fetch_assoc());
 }
 

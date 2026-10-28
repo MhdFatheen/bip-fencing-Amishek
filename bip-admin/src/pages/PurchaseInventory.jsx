@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/api";
 import { branchLabel } from "../utils/branchNames";
 
@@ -24,6 +25,7 @@ const getStoredUser = () => {
 };
 
 export default function PurchaseInventory() {
+  const navigate = useNavigate();
   const storedUser = getStoredUser();
   const isAdmin = storedUser?.role === "admin";
 
@@ -384,6 +386,14 @@ export default function PurchaseInventory() {
               </p>
             </div>
           </div>
+          <button
+            type="button"
+            className="at-btn at-btn--ghost"
+            title="View stock movements and balance"
+            onClick={() => navigate("/statements?type=inventory")}
+          >
+            <i className="bi bi-journal-text"></i> View Statement
+          </button>
         </div>
 
         <div className="at-stats">
@@ -510,7 +520,7 @@ export default function PurchaseInventory() {
                   <i className="bi bi-building"></i>
                   <div>
                     Viewing all branches. Select a specific branch from the
-                    topbar (Valioor, Naguneri or Kadambakulam) to deduct stock.
+                    topbar (Kadambankulam, Nanguneri or Kadambankulam) to deduct stock.
                   </div>
                 </div>
               )}
@@ -675,7 +685,7 @@ export default function PurchaseInventory() {
                         </div>
                         <div className="at-bubble-body">
                           <div className="at-bubble-stat">
-                            <b>HSN Code</b>
+                            <b>Product ID</b>
                             {p.product_id}
                           </div>
                           {isAdmin && (
@@ -710,6 +720,16 @@ export default function PurchaseInventory() {
                               }
                             >
                               <i className="bi bi-bell"></i> Set Alert
+                            </button>
+                            <button
+                              className="at-act-btn"
+                              onClick={() =>
+                                navigate(
+                                  `/statements?type=product&product_id=${p.product_id}&src=purchase&product=${encodeURIComponent(p.product_name)}${p.branch_id ? `&branch=${p.branch_id}` : ""}`,
+                                )
+                              }
+                            >
+                              <i className="bi bi-journal-text"></i> Statement
                             </button>
                             {isAdmin && (
                               <button
@@ -851,7 +871,7 @@ export default function PurchaseInventory() {
                         {h.deducted_at}
                       </div>
                       <div className="at-bubble-stat">
-                        <b>HSN code</b>
+                        <b>Product ID</b>
                         {h.product_id}
                       </div>
                       <div className="at-bubble-stat">

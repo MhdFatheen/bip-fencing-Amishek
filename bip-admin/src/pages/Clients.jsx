@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/api";
+import PhoneInput from "../components/PhoneInput";
+import SharePrompt, { shareImage } from "../components/SharePrompt";
+import { waLink, showPhone } from "../utils/phone";
 
 const BIP_LOGO_B64 =
   "data:image/jpeg;base64,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";
@@ -23,10 +26,13 @@ const fmt = (n) =>
 
 const inr = (v) => `₹ ${fmt(v)}`;
 
-const getStatusBadge = (pending, totalBilled) => {
+const getStatusBadge = (pending, totalBilled, purchased = 0) => {
   const net = Number(pending);
-  // Negative net = the purchase bills outweigh the invoices, so WE owe them.
-  if (net < 0) return { label: "You Owe", cls: "cl-tag--unpaid" };
+  // negative: purchase bills → we owe them; otherwise their advance is with us
+  if (net < 0)
+    return Number(purchased) > 0
+      ? { label: "You Owe", cls: "cl-tag--unpaid" }
+      : { label: "Advance Bal", cls: "cl-tag--paid" };
   if (net === 0) return { label: "Settled", cls: "cl-tag--paid" };
   if (net >= Number(totalBilled))
     return { label: "Unpaid", cls: "cl-tag--unpaid" };
@@ -34,10 +40,12 @@ const getStatusBadge = (pending, totalBilled) => {
 };
 
 // Net balance shown as a positive number plus a direction label.
-const balanceView = (net) => {
+const balanceView = (net, purchased = 0) => {
   const v = Number(net) || 0;
   return v < 0
-    ? { label: "You Owe", amount: Math.abs(v), cls: "cl-amount--red", weOwe: true }
+    ? Number(purchased) > 0
+      ? { label: "You Owe", amount: Math.abs(v), cls: "cl-amount--red", weOwe: true }
+      : { label: "Advance Bal", amount: Math.abs(v), cls: "cl-amount--green", weOwe: true }
     : { label: "Balance Due", amount: v, cls: "cl-amount--red", weOwe: false };
 };
 
@@ -187,7 +195,12 @@ function TaxInvoiceView({ inv, onBack }) {
   const itemCount = rows.length;
   const dynFont = itemCount <= 10 ? 11 : itemCount <= 20 ? 12 : itemCount <= 30 ? 11 : 10;
   const dynPad = itemCount <= 20 ? "3px 6px" : "2px 5px";
-  const MIN_ROWS = itemCount >= 15 ? 0 : Math.max(0, 15 - itemCount);
+    // ⬇ ONE-PAGE CONTROL: blank rows under the items. Bill goes to 2nd page → make smaller (12, 11…).
+  //   Too much empty space at the bottom → make bigger (14, 15…).
+  const PAGE_FILL_ROWS = 8;
+  // ⬇ Size of the AMOUNT numbers in the tax table (Taxable / CGST / SGST / Total). Bigger = 14, 15…
+  const AMT_FONT = 14;
+const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - itemCount);
 
   const dc = (extra = {}) => ({
     border: "none",
@@ -217,7 +230,15 @@ function TaxInvoiceView({ inv, onBack }) {
   const netAmount = Number(inv.net_amount || 0);
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const openBalance = Number(inv.open_balance || 0);
-  const closingBalance = openBalance + netAmount;
+  const paidAmt = Number(inv.paid_amount || 0);
+  const closingBalance = openBalance + netAmount - paidAmt;
+  // same 4 lines as the Sales bill
+  const balLines = {
+    open: Math.max(openBalance, 0),
+    advance: Math.max(-openBalance, 0) + paidAmt,
+    recBal: Math.max(-closingBalance, 0),
+    closing: Math.max(closingBalance, 0),
+  };
 
   const hsnGroups = {};
   rows.forEach((r) => {
@@ -264,6 +285,7 @@ function TaxInvoiceView({ inv, onBack }) {
         </button>
       </div>
 
+      <div className="doc-scroll">
       <div
         id="invoice-print"
         style={{
@@ -364,8 +386,8 @@ function TaxInvoiceView({ inv, onBack }) {
         </table>
 
         {/* PRODUCT TABLE */}
-        <div style={{ flex: 1 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", borderTop: B, borderBottom: B }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+          <table style={{ width: "100%", height: "100%", flex: 1, borderCollapse: "collapse", tableLayout: "fixed", borderTop: B, borderBottom: B }}>
             <colgroup>
               <col style={{ width: "4%" }} />
               <col style={{ width: "48%" }} />
@@ -414,15 +436,25 @@ function TaxInvoiceView({ inv, onBack }) {
                   ))}
                 </tr>
               ))}
+              {/* stretch row: takes the leftover page height so there is no gap */}
+              <tr style={{ height: "100%" }}>
+                {Array(8).fill(null).map((__, j) => (
+                  <td key={j} style={dc()}></td>
+                ))}
+              </tr>
 
               {(openBalance !== 0 || netAmount !== 0) && (
                 <tr>
                   <td colSpan={8} style={dc({ borderTop: "1px dashed #999", padding: "3px 7px" })}>
-                    <div style={{ fontWeight: "bold", fontSize: dynFont + 2 }}>
-                      Open Balance: ₹ {fmt2(openBalance)}
-                    </div>
-                    <div style={{ fontWeight: "bold", fontSize: dynFont + 2 }}>
-                      Closing Balance: ₹ {fmt2(closingBalance)}
+                    <div style={{ display: "flex", fontWeight: "bold", fontSize: dynFont + 2 }}>
+                      <div style={{ flex: 1, paddingRight: 10 }}>
+                        <div>Open Balance: ₹ {fmt2(balLines.open)}</div>
+                        <div>Closing Balance: ₹ {fmt2(balLines.closing)}</div>
+                      </div>
+                      <div style={{ flex: 1, paddingLeft: 10, borderLeft: "1px solid #000" }}>
+                        <div>Advance Received: ₹ {fmt2(balLines.advance)}</div>
+                        <div>Received Balance: ₹ {fmt2(balLines.recBal)}</div>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -475,12 +507,12 @@ function TaxInvoiceView({ inv, onBack }) {
         <table style={{ width: "100%", borderCollapse: "collapse", borderBottom: B }}>
           <tbody>
             <tr>
-              <td style={{ width: "58%", borderRight: B, padding: "3px 7px", verticalAlign: "middle", fontSize: 10 }}>
+              <td style={{ width: "58%", borderRight: B, padding: "3px 7px", verticalAlign: "middle", fontSize: 12 }}>
                 <span style={{ fontWeight: "bold" }}>Amount Chargeable (in words): </span>
                 <em style={{ fontWeight: "bold" }}>{numberToWords(netAmount)}</em>
               </td>
               <td style={{ padding: "3px 7px", verticalAlign: "middle", textAlign: "right" }}>
-                <div style={{ fontSize: 10 }}>E. &amp; O.E</div>
+                <div style={{ fontSize: 12 }}>E. &amp; O.E</div>
               </td>
             </tr>
           </tbody>
@@ -508,7 +540,7 @@ function TaxInvoiceView({ inv, onBack }) {
                 ["SGST/UTGST\nAmount", "right"],
                 ["Total Tax\nAmount", "right"],
               ].map(([label, align]) => (
-                <th key={label} style={dhc({ textAlign: align, whiteSpace: "pre-line", padding: "2px 6px", fontSize: 10 })}>
+                <th key={label} style={dhc({ textAlign: align, whiteSpace: "pre-line", padding: "2px 6px", fontSize: 12 })}>
                   {label}
                 </th>
               ))}
@@ -517,28 +549,28 @@ function TaxInvoiceView({ inv, onBack }) {
           <tbody>
             {Object.entries(hsnGroups).map(([hsn, d]) => (
               <tr key={hsn}>
-                <td style={dc({ textAlign: "center", fontSize: 11 })}>{hsn}</td>
-                <td style={dc({ textAlign: "right", fontSize: 11 })}>{fmt2(d.taxableValue)}</td>
-                <td style={dc({ textAlign: "center", fontSize: 10 })}>{cgstRate}%</td>
-                <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(d.cgst)}</td>
-                <td style={dc({ textAlign: "center", fontSize: 10 })}>{sgstRate}%</td>
-                <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(d.sgst)}</td>
-                <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(d.cgst + d.sgst)}</td>
+                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{hsn}</td>
+                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.taxableValue)}</td>
+                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{cgstRate}%</td>
+                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst)}</td>
+                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{sgstRate}%</td>
+                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.sgst)}</td>
+                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst + d.sgst)}</td>
               </tr>
             ))}
             <tr style={{ background: "#f5f5f5", fontWeight: "bold" }}>
-              <td style={dc({ borderTop: B, borderBottom: B, fontSize: 10 })}>Total</td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(subtotal)}</td>
+              <td style={dc({ borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>Total</td>
+              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(subtotal)}</td>
               <td style={dc({ borderTop: B, borderBottom: B })}></td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(cgstAmt)}</td>
+              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(cgstAmt)}</td>
               <td style={dc({ borderTop: B, borderBottom: B })}></td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(sgstAmt)}</td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(totalTax)}</td>
+              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(sgstAmt)}</td>
+              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(totalTax)}</td>
             </tr>
           </tbody>
         </table>
 
-        <div style={{ padding: "2px 7px", borderBottom: B, fontSize: 10 }}>
+        <div style={{ padding: "2px 7px", borderBottom: B, fontSize: 14 }}>
           <strong>Tax Amount (in words):</strong>&nbsp;
           <em style={{ fontWeight: "bold" }}>{numberToWords(totalTax)}</em>
         </div>
@@ -548,8 +580,8 @@ function TaxInvoiceView({ inv, onBack }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }} className="inv-footer">
             <tbody>
               <tr>
-                <td style={{ width: "44%", borderRight: B, padding: "4px 7px", verticalAlign: "top", fontSize: 10 }}>
-                  <div style={{ fontWeight: "bold", marginBottom: 2, fontSize: 15 }}>
+                <td style={{ width: "44%", borderRight: B, padding: "4px 7px", verticalAlign: "top", fontSize: 12 }}>
+                  <div style={{ fontWeight: "bold", marginBottom: 2, fontSize: 17 }}>
                     Company's Bank Details
                   </div>
                   {[
@@ -558,27 +590,27 @@ function TaxInvoiceView({ inv, onBack }) {
                     ["A/c No.", inv.bank_account_no],
                     ["Branch & IFS Code", `${inv.bank_branch || ""} & ${inv.bank_ifsc || ""}`],
                   ].map(([k, v]) => (
-                    <div key={k} style={{ marginBottom: 2, fontSize: 12 }}>
+                    <div key={k} style={{ marginBottom: 2, fontSize: 14 }}>
                       <strong>{k}</strong>: {v}
                     </div>
                   ))}
                 </td>
                 <td style={{ padding: "4px 7px", verticalAlign: "top" }}>
-                  <div style={{ fontSize: 9, marginBottom: 4 }}>
+                  <div style={{ fontSize: 11, marginBottom: 4 }}>
                     <strong>Declaration:</strong> {DECLARATION}
                   </div>
-                  <div style={{ textAlign: "right", fontWeight: "bold", fontSize: 10, marginBottom: 2 }}>
+                  <div style={{ textAlign: "right", fontWeight: "bold", fontSize: 12, marginBottom: 2 }}>
                     for {COMPANY.name}
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: 28 }}>
                     <div style={{ textAlign: "center", width: "42%" }}>
-                      <div style={{ borderTop: B, paddingTop: 2, fontSize: 10 }}>Receiver's Signature</div>
+                      <div style={{ borderTop: B, paddingTop: 2, fontSize: 12 }}>Receiver's Signature</div>
                     </div>
                     <div style={{ textAlign: "center", width: "42%" }}>
-                      <div style={{ borderTop: B, paddingTop: 2, fontSize: 10 }}>Authorised Signatory</div>
+                      <div style={{ borderTop: B, paddingTop: 2, fontSize: 12 }}>Authorised Signatory</div>
                     </div>
                   </div>
-                  <div style={{ textAlign: "center", marginTop: 4, fontSize: 9, color: "#666" }}>
+                  <div style={{ textAlign: "center", marginTop: 4, fontSize: 11, color: "#666" }}>
                     This is a Computer Generated Invoice
                   </div>
                 </td>
@@ -586,6 +618,7 @@ function TaxInvoiceView({ inv, onBack }) {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </div>
   );
@@ -641,6 +674,7 @@ function QuotationView({ data, onBack }) {
         </div>
       </div>
 
+      <div className="doc-scroll">
       <div
         id="quotation-print"
         style={{
@@ -1089,7 +1123,7 @@ function QuotationView({ data, onBack }) {
             </div>
             <div>Bank Name : CANARA BANK</div>
             <div>A/C No. : 120017946948</div>
-            <div>Branch &amp; IFS Code: THERKU VALLIOOR &amp; CNRB0003657</div>
+            <div>Branch &amp; IFS Code: THERKU Kadambankulam &amp; CNRB0003657</div>
           </div>
           <div style={{ flex: 1, padding: "8px", fontSize: "11px" }}>
             <div style={{ fontWeight: "bold", marginBottom: "4px" }}>
@@ -1147,6 +1181,7 @@ function QuotationView({ data, onBack }) {
         </div>
       </div>
     </div>
+    </div>
   );
 }
 
@@ -1201,17 +1236,22 @@ function CustomerFormFields({ form, setForm, onPhoneBlur }) {
           <label className="cl-label">
             {f.label} {f.required && <span className="cl-req">*</span>}
           </label>
-          <input
-            className="cl-input"
-            type="text"
-            value={form[f.key] || ""}
-            onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-            onBlur={
-              f.key === "phone" && onPhoneBlur
-                ? (e) => onPhoneBlur(e.target.value)
-                : undefined
-            }
-          />
+          {f.key === "phone" ? (
+            <PhoneInput
+              className="cl-input"
+              name="phone"
+              value={form.phone || ""}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              onBlur={onPhoneBlur ? (e) => onPhoneBlur(e.target.value) : undefined}
+            />
+          ) : (
+            <input
+              className="cl-input"
+              type="text"
+              value={form[f.key] || ""}
+              onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+            />
+          )}
           {f.hint && (
             <small style={{ color: "#6b7280", fontSize: 12 }}>{f.hint}</small>
           )}
@@ -1241,8 +1281,20 @@ export default function Clients() {
     note: "",
   });
   const [payLoading, setPayLoading] = useState(false);
+  // Record Payment: customer picker (defaults to the opened customer)
+  const [payClient, setPayClient] = useState(null);
+  const [payName, setPayName] = useState("");
+  const [payNameOpen, setPayNameOpen] = useState(false);
+  useEffect(() => {
+    if (showPayModal && selected) {
+      setPayClient(null);
+      setPayName("");
+      setPayForm((p) => ({ ...p, note: p.note || "Cash" }));
+    }
+  }, [showPayModal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [viewInvoice, setViewInvoice] = useState(null);
+  const [pendingShare, setPendingShare] = useState(null); // WhatsApp share waiting for a tap
   const [viewLoading, setViewLoading] = useState(false);
 
   // Page-level tab: Customer Directory vs Quotations
@@ -1374,6 +1426,45 @@ export default function Clients() {
     }
   };
 
+  // Full details of a saved invoice for WhatsApp (figures as stored)
+  const savedInvoiceText = (inv) => {
+    const m = (n) => `₹${fmt(n)}`;
+    const L = [];
+    L.push(`*BIP FENCING — Tax Invoice ${inv.invoice_no}*`);
+    L.push(`Date: ${inv.invoice_date || "-"}`);
+    L.push(`Customer: ${inv.buyer_name || "-"}`);
+    const ph = String(inv.buyer_phone || "").replace(/\D/g, "").slice(-10);
+    if (ph) L.push(`Phone: +91 ${ph}`);
+    L.push("");
+    L.push("*Items*");
+    (inv.items || []).forEach((it, i) => {
+      const q = Number(it.qty) || 0;
+      const r = Number(it.rate_incl) || 0;
+      L.push(`${i + 1}. ${it.description || "-"} — ${q} ${it.per || ""} × ${m(r)} = ${m(q * r)}`);
+    });
+    L.push("");
+    if (inv.subtotal != null) L.push(`Taxable Value: ${m(inv.subtotal)}`);
+    if (Number(inv.total_tax)) L.push(`GST: ${m(inv.total_tax)}`);
+    if (Number(inv.round_off)) L.push(`Round Off: ${m(inv.round_off)}`);
+    L.push(`*Invoice Total: ${m(inv.net_amount)}*`);
+    if (inv.payment_mode) L.push(`Payment: ${inv.payment_mode}`);
+    {
+      const ob = Number(inv.open_balance || 0);
+      const pd = Number(inv.paid_amount || 0);
+      const cb = ob + Number(inv.net_amount || 0) - pd;
+      L.push(
+        `Open Balance: ${m(Math.max(ob, 0))}`,
+        `Closing Balance: ${m(Math.max(cb, 0))}`,
+        `Advance Received: ${m(Math.max(-ob, 0) + pd)}`,
+        `Received Balance: ${m(Math.max(-cb, 0))}`,
+      );
+    }
+    L.push("");
+    L.push("Thank you,");
+    L.push("BIP Fencing");
+    return L.join("\n");
+  };
+
   // Render the invoice off-screen, snapshot it, and share/download as an image.
   const handleShareInvoicePDF = async (invoice_no) => {
     try {
@@ -1387,27 +1478,26 @@ export default function Clients() {
         const html2canvas = (await import("html2canvas")).default;
         const el = document.getElementById("invoice-print");
         if (!el) return;
-        const canvas = await html2canvas(el, { scale: 2 });
+        const canvas = await html2canvas(el, {
+          scale: 2,
+          backgroundColor: "#fff",
+          windowWidth: el.scrollWidth + 40,
+          onclone: (doc) =>
+            doc.querySelectorAll(".doc-scroll").forEach((n) => (n.style.overflow = "visible")),
+        });
         const blob = await new Promise((resolve) =>
           canvas.toBlob(resolve, "image/png"),
         );
-        const file = new File([blob], `${inv.invoice_no}.png`, {
-          type: "image/png",
-        });
-        if (navigator.share && navigator.canShare?.({ files: [file] })) {
-          await navigator.share({ files: [file], title: inv.invoice_no });
-        } else {
-          const link = document.createElement("a");
-          link.href = URL.createObjectURL(blob);
-          link.download = `${inv.invoice_no}.png`;
-          link.click();
-          const raw = (inv.buyer_phone || selected?.phone || "").replace(/\D/g, "");
-          const phone = raw.length === 10 ? `91${raw}` : raw;
-          const text = encodeURIComponent(
-            `Dear ${inv.buyer_name},\n\nInvoice ${inv.invoice_no} — ₹${fmt(inv.net_amount)}\n\nThank you,\nBIP Fencing`,
-          );
-          window.open(`https://wa.me/${phone}?text=${text}`, "_blank");
-        }
+        if (!blob) return showToast("Could not create the invoice image", "error");
+        const job = {
+          blob,
+          fileName: `${inv.invoice_no}.png`,
+          phone: inv.buyer_phone || selected?.phone || "",
+          text: savedInvoiceText(inv),
+        };
+        // phones block sharing after the delay → show a "Share on WhatsApp" button
+        const result = await shareImage(job);
+        if (result === "needs-tap") setPendingShare(job);
       }, 500);
     } catch (err) {
       console.error(err);
@@ -1495,20 +1585,68 @@ export default function Clients() {
       showToast("Amount and date required", "error");
       return;
     }
+    // Typed name (no click needed): match a customer by name, ignoring case/spaces
+    const norm = (v) => String(v || "").toLowerCase().replace(/\s+/g, "");
+    const typed = norm(payName);
+    const picked = payClient || (typed ? clients.find((c) => norm(c.name) === typed) : null);
+    const moveTo = picked && picked.id !== selected.id ? picked : null;
+    // Safety: can't hand over more than this customer owes (stops 50000 vs 5000 typos)
+    const pendingNow = Number(clientDetail?.pending ?? selected?.pending ?? 0);
+    const amt = Number(payForm.amount) || 0;
+    if (amt <= 0) {
+      showToast("Enter a valid amount", "error");
+      return;
+    }
+    if (moveTo && amt > pendingNow) {
+      showToast(`${selected.name} owes only ${inr(pendingNow)} — amount is more than that`, "error");
+      return;
+    }
+    const isAdvance = String(payForm.note || "").startsWith("Advance");
+    if (!moveTo && !isAdvance && amt > pendingNow && !window.confirm(`${selected.name} owes only ${inr(pendingNow)}. Save ${inr(amt)} anyway?`)) {
+      return;
+    }
+    // own name typed = normal payment
+    if (typed && !moveTo && typed !== norm(selected.name)) {
+      showToast("Pick the customer from the list (or clear the box)", "error");
+      return;
+    }
+
     setPayLoading(true);
     try {
       const res = await apiFetch("/client.php", {
         method: "POST",
         body: JSON.stringify({
-          client_id: selected.id,
           ...payForm,
+          // Reduces the opened customer's balance. If a customer is picked in
+          // "Move balance to", the same amount is added to that customer's pending.
+          client_id: selected.id,
+          note: [payForm.note || "Cash", moveTo ? `Collected by ${moveTo.name}` : ""].filter(Boolean).join(" · "),
         }),
       });
       const data = await res.json();
+      if (data.success && moveTo) {
+        // Collected by driver: driver now holds the cash → amount becomes pending on the driver
+        // add the same amount as pending on the picked customer (negative receipt = they owe)
+        const r2 = await apiFetch("/client.php", {
+          method: "POST",
+          body: JSON.stringify({
+            client_id: moveTo.id,
+            amount: -Math.abs(Number(payForm.amount)),
+            payment_date: payForm.payment_date,
+            note: `Collected from ${selected.name} (to hand over)`,
+          }),
+        });
+        const d2 = await r2.json();
+        if (!d2.success) showToast(d2.message || `Could not add to ${moveTo.name}`, "error");
+      }
       if (data.success) {
         setShowPayModal(false);
         setPayForm({ amount: "", payment_date: "", note: "" });
-        showToast("Payment recorded successfully");
+        showToast(
+          moveTo
+            ? `₹${payForm.amount}: ${selected?.name} paid → ${moveTo.name} has to hand it over`
+            : `Payment recorded for ${selected?.name || "customer"}`,
+        );
         fetchClients();
         setSelected((prev) => ({ ...prev }));
       } else {
@@ -1521,6 +1659,19 @@ export default function Clients() {
       setPayLoading(false);
     }
   };
+
+  // ✏️ button used on every Overview row
+  const EditBtn = ({ onClick, title }) => (
+    <button
+      className="cl-btn cl-btn--tiny cl-btn--ghost"
+      style={{ marginLeft: 8 }}
+      onClick={onClick}
+      title={title}
+    >
+      ✏️ Edit
+    </button>
+  );
+  const goTab = (t) => () => setActiveTab(t);
 
   const openEditModal = (e, client) => {
     e.stopPropagation();
@@ -1665,7 +1816,6 @@ export default function Clients() {
 
   const sendInvoiceWhatsApp = () => {
     if (!selected || !clientDetail) return;
-    const phone = selected.phone?.replace(/\D/g, "");
     const invoiceList = (clientDetail.invoices || [])
       .map(
         (i) => `• ${i.invoice_no} | ${i.invoice_date} | ₹${fmt(i.net_amount)}`,
@@ -1674,16 +1824,16 @@ export default function Clients() {
     const text = encodeURIComponent(
       `Dear ${selected.name},\n\nHere are your invoice details:\n${invoiceList}\n\nTotal Billed: ₹${fmt(clientDetail.total_billed)}\n\nThank you,\nBIP Fencing`,
     );
-    window.open(`https://wa.me/${phone}?text=${text}`, "_blank");
+    // waLink adds +91 (never twice) so WhatsApp can find the number
+    window.open(waLink(selected.phone, decodeURIComponent(text)), "_blank");
   };
 
   const sendPaymentReminder = () => {
     if (!selected || !clientDetail) return;
-    const phone = selected.phone?.replace(/\D/g, "");
     const text = encodeURIComponent(
       `Dear ${selected.name},\n\nThis is a gentle payment reminder:\n\nTotal Billed: ₹${fmt(clientDetail.total_billed)}\nTotal Paid:   ₹${fmt(clientDetail.total_paid)}\nPending:      ₹${fmt(clientDetail.pending)}\n\nPlease clear the pending amount at your earliest convenience.\n\nThank you,\nBIP Fencing`,
     );
-    window.open(`https://wa.me/${phone}?text=${text}`, "_blank");
+    window.open(waLink(selected.phone, decodeURIComponent(text)), "_blank");
   };
 
   const filtered = clients.filter((c) => {
@@ -1696,6 +1846,7 @@ export default function Clients() {
     const status = getStatusBadge(
       c.pending,
       c.total_billed,
+      c.total_purchased,
     ).label.toLowerCase();
     const matchStatus = statusFilter
       ? status.includes(statusFilter.toLowerCase())
@@ -1756,7 +1907,10 @@ export default function Clients() {
 
   if (viewInvoice)
     return (
-      <TaxInvoiceView inv={viewInvoice} onBack={() => setViewInvoice(null)} />
+      <>
+        <TaxInvoiceView inv={viewInvoice} onBack={() => setViewInvoice(null)} />
+        <SharePrompt pending={pendingShare} onClose={() => setPendingShare(null)} />
+      </>
     );
 
   if (viewQuotation)
@@ -2014,6 +2168,7 @@ export default function Clients() {
                       const status = getStatusBadge(
                         client.net_balance ?? client.pending,
                         client.total_billed,
+                        client.total_purchased,
                       );
                       return (
                         <tr
@@ -2069,7 +2224,7 @@ export default function Clients() {
                           </td>
                           <td>
                             {(() => {
-                              const b = balanceView(client.net_balance);
+                              const b = balanceView(client.net_balance, client.total_purchased);
                               return (
                                 <span
                                   className="cl-amount cl-amount--red"
@@ -2083,7 +2238,7 @@ export default function Clients() {
                                         fontSize: 11,
                                       }}
                                     >
-                                      You Owe
+                                      {b.label}
                                     </small>
                                   )}
                                   {inr(b.amount)}
@@ -2152,18 +2307,30 @@ export default function Clients() {
               </div>
               <div className="cl-detail__info">
                 <h3>{selected.name}</h3>
-                <p>{selected.phone || "—"}</p>
+                <p>{selected.phone ? showPhone(selected.phone) : "—"}</p>
                 <span
-                  className={`cl-tag ${getStatusBadge(selected.net_balance ?? selected.pending, selected.total_billed).cls}`}
+                  className={`cl-tag ${getStatusBadge(selected.net_balance ?? selected.pending, selected.total_billed, selected.total_purchased).cls}`}
                 >
                   {
                     getStatusBadge(
                       selected.net_balance ?? selected.pending,
                       selected.total_billed,
+                      selected.total_purchased,
                     ).label
                   }
                 </span>
               </div>
+              <button
+                type="button"
+                className="cl-btn cl-btn--primary"
+                style={{ marginLeft: "auto" }}
+                title="Bank-statement style customer statement"
+                onClick={() =>
+                  navigate(`/statements?type=customer&client_id=${selected.id}`)
+                }
+              >
+                <i className="bi bi-journal-text"></i> Statement
+              </button>
               {isAdmin && (
                 <div className="cl-actions">
                   <button
@@ -2216,12 +2383,16 @@ export default function Clients() {
                   <div className="cl-detail-rows">
                     <div className="cl-detail-row">
                       <span>Total Invoiced</span>
-                      <strong>{inr(clientDetail.total_billed)}</strong>
+                      <strong>
+                        {inr(clientDetail.total_billed)}
+                        <button className="cl-btn cl-btn--tiny cl-btn--ghost" style={{ marginLeft: 8 }} onClick={() => setActiveTab("invoices")} title="Edit / delete bills">✏️ Edit</button>
+                      </strong>
                     </div>
                     <div className="cl-detail-row">
                       <span>Received from them</span>
                       <strong style={{ color: "#16a34a" }}>
                         {inr(clientDetail.total_paid)}
+                        <button className="cl-btn cl-btn--tiny cl-btn--ghost" style={{ marginLeft: 8 }} onClick={() => setActiveTab("payments")} title="Edit / delete payments">✏️ Edit</button>
                       </strong>
                     </div>
                     <div className="cl-detail-row cl-detail-row--sum">
@@ -2238,18 +2409,23 @@ export default function Clients() {
                   <div className="cl-detail-rows">
                     <div className="cl-detail-row">
                       <span>Total Purchased</span>
-                      <strong>{inr(clientDetail.total_purchased)}</strong>
+                      <strong>
+                        {inr(clientDetail.total_purchased)}
+                        <EditBtn onClick={goTab("purchases")} title="Edit purchase bills" />
+                      </strong>
                     </div>
                     <div className="cl-detail-row">
                       <span>Paid to them</span>
                       <strong style={{ color: "#16a34a" }}>
                         {inr(clientDetail.purchase_paid)}
+                        <EditBtn onClick={goTab("purchases")} title="Edit purchase payments" />
                       </strong>
                     </div>
                     <div className="cl-detail-row">
                       <span>Settled (cash / product)</span>
                       <strong style={{ color: "#16a34a" }}>
                         {inr(clientDetail.settled)}
+                        <EditBtn onClick={goTab("purchases")} title="Edit settlements" />
                       </strong>
                     </div>
                     <div className="cl-detail-row cl-detail-row--sum">
@@ -2260,10 +2436,15 @@ export default function Clients() {
 
                   {/* ── NET TOTAL ── */}
                   {(() => {
-                    const b = balanceView(clientDetail.net_balance);
+                    const b = balanceView(clientDetail.net_balance, clientDetail.total_purchased);
                     return (
                       <div
-                        className={`cl-net-total${b.weOwe ? " cl-net-total--owe" : ""}`}
+                        className={`cl-net-total${
+                          // 🟢 advance with us / settled   🔴 balance due or we owe (purchases)
+                          (!b.weOwe && b.amount > 0) || (b.weOwe && Number(clientDetail.total_purchased) > 0)
+                            ? " cl-net-total--owe"
+                            : ""
+                        }`}
                       >
                         <span className="cl-net-total__label">{b.label}</span>
                         <span className="cl-net-total__value">
@@ -2271,8 +2452,10 @@ export default function Clients() {
                         </span>
                         <span className="cl-net-total__hint">
                           {b.weOwe
-                            ? "Purchases exceed invoices — settle in cash or product"
-                            : "Invoices exceed purchases — collect from the party"}
+                            ? Number(clientDetail.total_purchased) > 0
+                              ? "Purchases exceed invoices — settle in cash or product"
+                              : "Customer's advance with us — used in the next bill"
+                            : "Amount to collect from the customer"}
                         </span>
                       </div>
                     );
@@ -2281,7 +2464,7 @@ export default function Clients() {
                   <div className="cl-detail-rows">
                     {[
                       ["Total Billed", inr(clientDetail.total_billed)],
-                      ["Phone", selected.phone || "—"],
+                      ["Phone", selected.phone ? showPhone(selected.phone) : "—"],
                       ["Address", selected.address || "—"],
                       ["GST", selected.gst || "—"],
                       [
@@ -2299,7 +2482,14 @@ export default function Clients() {
                     ].map(([key, value]) => (
                       <div key={key} className="cl-detail-row">
                         <span>{key}</span>
-                        <strong>{value}</strong>
+                        <strong>
+                          {value}
+                          {["Total Billed", "Last Invoice", "Last Invoice Date"].includes(key) ? (
+                            <EditBtn onClick={goTab("invoices")} title="Edit bills" />
+                          ) : (
+                            <EditBtn onClick={(e) => openEditModal(e, selected)} title="Edit customer details" />
+                          )}
+                        </strong>
                       </div>
                     ))}
                   </div>
@@ -2311,7 +2501,7 @@ export default function Clients() {
                     <i className="bi bi-plus-circle"></i> Recieve Payment
                   </button>
 
-                  {Number(clientDetail.net_balance) < 0 && (
+                  {Number(clientDetail.net_balance) < 0 && Number(clientDetail.total_purchased) > 0 && (
                     <button
                       className="cl-btn cl-btn--block"
                       style={{
@@ -2450,6 +2640,15 @@ export default function Clients() {
                         <div className="cl-actions">
                           <button
                             className="cl-btn cl-btn--tiny cl-btn--ghost"
+                            title="Statement of this invoice"
+                            onClick={() =>
+                              navigate(`/statements?type=sales&invoice_no=${encodeURIComponent(inv.invoice_no)}`)
+                            }
+                          >
+                            📒 Statement
+                          </button>
+                          <button
+                            className="cl-btn cl-btn--tiny cl-btn--ghost"
                             onClick={() => handleViewInvoice(inv.invoice_no)}
                             disabled={viewLoading}
                           >
@@ -2465,6 +2664,36 @@ export default function Clients() {
                             title="Add items from another branch to this same bill"
                           >
                             ➕ Continue
+                          </button>
+                          <button
+                            className="cl-btn cl-btn--tiny cl-btn--ghost"
+                            onClick={() =>
+                              navigate("/tax-invoice", {
+                                state: { continueInvoiceNo: inv.invoice_no },
+                              })
+                            }
+                            title="Open this bill to change items / amounts, then save again"
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            className="cl-btn cl-btn--tiny cl-btn--ghost"
+                            style={{ color: "#dc2626" }}
+                            onClick={async () => {
+                              if (!window.confirm(`Delete bill ${inv.invoice_no} (${inr(inv.net_amount)})?\nStock will NOT be added back automatically.`)) return;
+                              try {
+                                const res = await apiFetch(`/client.php?invoice_id=${inv.id}`, { method: "DELETE" });
+                                const d = await res.json();
+                                if (!d.success) throw new Error(d.message || "Delete failed");
+                                showToast(`Bill ${inv.invoice_no} deleted`);
+                                fetchClients();
+                                setSelected((prev) => ({ ...prev }));
+                              } catch (err) {
+                                showToast(err.message, "error");
+                              }
+                            }}
+                          >
+                            🗑 Delete
                           </button>
                           <button
                             className="cl-btn cl-btn--tiny cl-btn--ghost"
@@ -2491,16 +2720,63 @@ export default function Clients() {
                     </div>
                   )}
                   {(clientDetail.payments || []).map((pay) => (
-                    <div key={pay.id} className="cl-list-item">
+                    <div key={pay.id} className="cl-list-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div>
-                        <p className="cl-amount cl-amount--green">
-                          {inr(pay.amount)}
+                        <p className={`cl-amount ${Number(pay.amount) < 0 ? "cl-amount--red" : "cl-amount--green"}`}>
+                          {Number(pay.amount) < 0 ? `+${inr(-pay.amount)} pending` : inr(pay.amount)}
                         </p>
                         <p className="cl-list-item__sub">{pay.payment_date}</p>
                         {pay.note && (
                           <p className="cl-list-item__sub">{pay.note}</p>
                         )}
                       </div>
+                      <button
+                        className="cl-btn cl-btn--ghost"
+                        title="Edit this entry"
+                        onClick={async () => {
+                          const a = window.prompt("Amount (₹):", pay.amount);
+                          if (a === null) return;
+                          const dt = window.prompt("Date (YYYY-MM-DD):", pay.payment_date);
+                          if (dt === null) return;
+                          const nt = window.prompt("Note (GPay / Cash / Cheque…):", pay.note || "");
+                          if (nt === null) return;
+                          try {
+                            const res = await apiFetch(`/client.php?payment_id=${pay.id}`, {
+                              method: "PUT",
+                              body: JSON.stringify({ amount: Number(a), payment_date: dt, note: nt }),
+                            });
+                            const d = await res.json();
+                            if (!d.success) throw new Error(d.message || "Update failed");
+                            showToast("Entry updated");
+                            fetchClients();
+                            setSelected((prev) => ({ ...prev }));
+                          } catch (err) {
+                            showToast(err.message, "error");
+                          }
+                        }}
+                      >
+                        <i className="bi bi-pencil"></i>
+                      </button>
+                      <button
+                        className="cl-btn cl-btn--ghost"
+                        title="Delete this entry"
+                        style={{ color: "#dc2626" }}
+                        onClick={async () => {
+                          if (!window.confirm(`Delete this entry of ${inr(pay.amount)}?`)) return;
+                          try {
+                            const res = await apiFetch(`/client.php?payment_id=${pay.id}`, { method: "DELETE" });
+                            const d = await res.json();
+                            if (!d.success) throw new Error(d.message || "Delete failed");
+                            showToast("Entry deleted");
+                            fetchClients();
+                            setSelected((prev) => ({ ...prev }));
+                          } catch (err) {
+                            showToast(err.message, "error");
+                          }
+                        }}
+                      >
+                        <i className="bi bi-trash"></i>
+                      </button>
                     </div>
                   ))}
                   <button
@@ -2731,6 +3007,59 @@ export default function Clients() {
                   }
                 />
               </div>
+              <div className="cl-fg" style={{ position: "relative" }}>
+                <label className="cl-label">
+                  Collected By (optional — e.g. driver)
+                </label>
+                <input
+                  className="cl-input"
+                  type="text"
+                  placeholder="Empty = normal payment"
+                  autoComplete="off"
+                  value={payName}
+                  onFocus={() => setPayNameOpen(true)}
+                  onBlur={() => setTimeout(() => setPayNameOpen(false), 150)}
+                  onChange={(e) => {
+                    setPayName(e.target.value);
+                    setPayClient(null);
+                    setPayNameOpen(true);
+                  }}
+                />
+                {payNameOpen && (
+                  <div
+                    style={{
+                      position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20,
+                      background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10,
+                      boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 220, overflowY: "auto",
+                    }}
+                  >
+                    {clients
+                      .filter((c) =>
+                        `${c.name || ""} ${c.phone || ""}`.toLowerCase().includes(payName.trim().toLowerCase()),
+                      )
+                      .slice(0, 15)
+                      .map((c) => (
+                        <div
+                          key={c.id}
+                          onMouseDown={() => {
+                            setPayClient(c);
+                            setPayName(c.name || "");
+                            setPayNameOpen(false);
+                          }}
+                          style={{
+                            padding: "9px 12px", cursor: "pointer", display: "flex",
+                            justifyContent: "space-between", borderBottom: "1px solid #f1f5f9",
+                          }}
+                        >
+                          <span><b>{c.name}</b> <small style={{ color: "#64748b" }}>{c.phone}</small></span>
+                          <small style={{ color: Number(c.pending) > 0 ? "#dc2626" : "#16a34a" }}>
+                            {inr(c.pending || 0)}
+                          </small>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
               <div className="cl-fg">
                 <label className="cl-label">
                   Payment Date <span className="cl-req">*</span>
@@ -2745,25 +3074,36 @@ export default function Clients() {
                 />
               </div>
               <div className="cl-fg">
-                <label className="cl-label">Note (optional)</label>
-                <input
+                <label className="cl-label">Payment Mode</label>
+                <select
                   className="cl-input"
-                  type="text"
-                  placeholder="e.g. UPI payment"
-                  value={payForm.note}
+                  value={payForm.note || "Cash"}
                   onChange={(e) =>
                     setPayForm({ ...payForm, note: e.target.value })
                   }
-                />
+                >
+                  <option value="GPay">GPay</option>
+                  <option value="Cash">Cash</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Advance · GPay">Advance — GPay</option>
+                  <option value="Advance · Cash">Advance — Cash</option>
+                  <option value="Advance · Cheque">Advance — Cheque</option>
+                </select>
               </div>
-              {clientDetail && (
-                <div className="cl-note-box">
-                  Pending:{" "}
-                  <strong className="cl-amount--red">
-                    {inr(clientDetail.pending)}
-                  </strong>
-                </div>
-              )}
+              <div className="cl-note-box">
+                Payment for: <b>{selected?.name}</b>
+                {clientDetail && (
+                  <>
+                    {" "}— Pending:{" "}
+                    <strong className="cl-amount--red">{inr(clientDetail.pending)}</strong>
+                  </>
+                )}
+                {payClient && payClient.id !== selected?.id && (
+                  <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+                    {selected?.name} −₹{payForm.amount || 0} · {payClient.name} +₹{payForm.amount || 0} pending (to hand over)
+                  </div>
+                )}
+              </div>
             </div>
             <div className="cl-modal__footer">
               <button
@@ -2784,6 +3124,8 @@ export default function Clients() {
           </div>
         </div>
       )}
+
+      <SharePrompt pending={pendingShare} onClose={() => setPendingShare(null)} />
 
       {/* ── Add Customer Modal ── */}
       {showAddModal && (

@@ -105,12 +105,14 @@ try {
          VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
     foreach ($clean as $it) {
+        // same code but different product name = a different product (see purchase_common.php)
+        $it['product_id'] = pbResolveProductId($conn, $it['product_id'], $it['product_name']);
         $ins->bind_param('issdddi', $billId, $it['product_id'], $it['product_name'],
             $it['quantity'], $it['rate'], $it['amount'], $branchId);
         $ins->execute();
+        pbApplyStock($conn, [$it], $branchId, +1);   // one by one so later items see earlier ones
     }
     $ins->close();
-    pbApplyStock($conn, $clean, $branchId, +1);
 
     $conn->commit();
     echo json_encode([

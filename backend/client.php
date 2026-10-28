@@ -51,7 +51,7 @@ function purchaseBillsForClient(mysqli $conn, array $client, $branch_id): array
         SELECT id, company_name, supplier_phone, invoice_no, bill_date,
                total_amount, paid_amount, notes
           FROM purchase_bills
-         WHERE (
+         WHERE COALESCE(client_detached,0) = 0 AND (
                  client_id = ?
                  OR (? <> '' AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)
                  OR (LOWER(TRIM(company_name)) = LOWER(TRIM(?)))
@@ -95,6 +95,15 @@ function ensureCustomerColumns(mysqli $conn): void {
     }
 }
 ensureCustomerColumns($conn);
+
+// Bills of a DELETED customer are marked "detached" so a new customer
+// with the same phone/name starts from 0 (bills stay in Sales/Purchase lists).
+foreach (['invoices', 'purchase_bills'] as $t) {
+    $res = $conn->query("SHOW COLUMNS FROM `$t` LIKE 'client_detached'");
+    if ($res && $res->num_rows === 0) {
+        $conn->query("ALTER TABLE `$t` ADD COLUMN client_detached TINYINT(1) NOT NULL DEFAULT 0");
+    }
+}
 
 // Find one customer by phone (last 10 digits = the customer key)
 function findCustomerByPhone(mysqli $conn, string $phone, $branch_id): ?array {
@@ -198,7 +207,7 @@ switch ($method) {
                 SELECT id, invoice_no, invoice_date, net_amount, payment_mode
                   FROM invoices
                  WHERE client_id = ?
-                    OR (client_id IS NULL AND ? <> ''
+                    OR (client_id IS NULL AND COALESCE(client_detached,0) = 0 AND ? <> ''
                         AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)
                  ORDER BY invoice_date DESC, id DESC
             ");
@@ -309,7 +318,7 @@ switch ($method) {
               FROM clients c
               LEFT JOIN invoices i
                      ON i.client_id = c.id
-                     OR (i.client_id IS NULL AND COALESCE(c.phone,'') <> ''
+                     OR (i.client_id IS NULL AND COALESCE(i.client_detached,0) = 0 AND COALESCE(c.phone,'') <> ''
                          AND CONVERT(RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(i.buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) USING utf8mb4) COLLATE utf8mb4_unicode_ci
                            = CONVERT(RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(c.phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) USING utf8mb4) COLLATE utf8mb4_unicode_ci)
         ";
@@ -441,8 +450,8 @@ switch ($method) {
             // Link this customer's existing bills/invoices by phone
             if ($phone !== '') {
                 foreach ([
-                    "UPDATE purchase_bills SET client_id = ? WHERE client_id IS NULL AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?",
-                    "UPDATE invoices SET client_id = ? WHERE client_id IS NULL AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?",
+                    "UPDATE purchase_bills SET client_id = ? WHERE client_id IS NULL AND COALESCE(client_detached,0) = 0 AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?",
+                    "UPDATE invoices SET client_id = ? WHERE client_id IS NULL AND COALESCE(client_detached,0) = 0 AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?",
                 ] as $sql) {
                     $lk = $conn->prepare($sql);
                     $lk->bind_param('is', $client_id, $phone);
@@ -619,6 +628,25 @@ switch ($method) {
     case 'PUT':
         $data = json_decode(file_get_contents('php://input'), true);
 
+        // ---- Edit one payment (amount / date / note) ----
+        if (!empty($_GET['payment_id'])) {
+            $pid  = (int) $_GET['payment_id'];
+            $amt  = (float) ($data['amount'] ?? 0);
+            $date = $data['payment_date'] ?? '';
+            $note = trim((string) ($data['note'] ?? ''));
+            if ($amt == 0 || $date === '') {
+                http_response_code(422);
+                echo json_encode(['success' => false, 'message' => 'Amount and date are required']);
+                exit;
+            }
+            $u = $conn->prepare("UPDATE client_payments SET amount = ?, payment_date = ?, note = ? WHERE id = ?");
+            $u->bind_param('dssi', $amt, $date, $note, $pid);
+            $u->execute();
+            $u->close();
+            echo json_encode(['success' => true, 'message' => 'Payment updated']);
+            break;
+        }
+
         if (empty($data['client_id']) || empty($data['name'])) {
             http_response_code(422);
             echo json_encode(['success' => false, 'message' => 'client_id and name are required']);
@@ -670,6 +698,28 @@ switch ($method) {
     //  DELETE
     // ----------------------------------------------------------
     case 'DELETE':
+
+        // ---- Delete one sales bill (invoice + its items) ----
+        if (!empty($_GET['invoice_id'])) {
+            $iid = (int) $_GET['invoice_id'];
+            $conn->begin_transaction();
+            try {
+                $d = $conn->prepare("DELETE FROM invoice_items WHERE invoice_id = ?");
+                $d->bind_param('i', $iid); $d->execute(); $d->close();
+                $d = $conn->prepare("DELETE FROM invoices WHERE id = ?");
+                $d->bind_param('i', $iid); $d->execute();
+                $ok = $d->affected_rows > 0; $d->close();
+                $conn->commit();
+            } catch (Throwable $e) {
+                $conn->rollback();
+                http_response_code(500);
+                echo json_encode(['success' => false, 'message' => 'Delete failed: ' . $e->getMessage()]);
+                break;
+            }
+            echo json_encode($ok ? ['success' => true, 'message' => 'Bill deleted']
+                                 : ['success' => false, 'message' => 'Bill not found']);
+            break;
+        }
 
         if (!empty($_GET['payment_id'])) {
             $payment_id = (int) $_GET['payment_id'];
@@ -747,6 +797,29 @@ switch ($method) {
         $stmt->bind_param('i', $client_id);
         $stmt->execute();
         $stmt->close();
+
+        // Detach this customer's bills (matched by id / phone / name) so a
+        // new customer with the same number does not get the old amounts.
+        $cs = $conn->prepare("SELECT phone, name FROM clients WHERE id = ?");
+        $cs->bind_param('i', $client_id);
+        $cs->execute();
+        $old = $cs->get_result()->fetch_assoc() ?: [];
+        $cs->close();
+        $oPhone = normPhone($old['phone'] ?? '');
+        $oName  = trim($old['name'] ?? '');
+
+        $d1 = $conn->prepare("UPDATE invoices SET client_detached = 1, client_id = NULL
+                               WHERE client_id = ? OR (client_id IS NULL AND ? <> '' AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(buyer_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)");
+        $d1->bind_param('iss', $client_id, $oPhone, $oPhone);
+        $d1->execute();
+        $d1->close();
+
+        $d2 = $conn->prepare("UPDATE purchase_bills SET client_detached = 1, client_id = NULL
+                               WHERE client_id = ? OR (? <> '' AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(supplier_phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ?)
+                                  OR (? <> '' AND LOWER(TRIM(company_name)) = LOWER(TRIM(?)))");
+        $d2->bind_param('issss', $client_id, $oPhone, $oPhone, $oName, $oName);
+        $d2->execute();
+        $d2->close();
 
         $stmt = $conn->prepare("DELETE FROM clients WHERE id = ?");
         $stmt->bind_param('i', $client_id);

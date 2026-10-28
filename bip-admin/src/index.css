@@ -609,3 +609,12 @@ body {
   .sidebar.open { transform: translateX(0); }
   .main-content { margin-left: 0; }
 }
+
+/* A4 documents (invoice / quotation) scroll inside their box on phones
+   instead of making the whole page wider than the screen */
+@media screen and (max-width: 900px) {
+  .doc-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+@media print {
+  .doc-scroll { overflow: visible !important; }
+}

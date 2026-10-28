@@ -1,52 +1,60 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import fenceBg from "../assets/fence-bg.webp";
 
 export default function BranchSelection() {
   const [selectedBranch, setSelectedBranch] = useState(null);
   const navigate = useNavigate();
 
+  // Real branch ids (same as the database / topbar): 1 Kadambankulam, 2 Fencing Group, 3 Panagudi
   const branches = [
     {
       id: 1,
-      name: "Valioor",
-      code: "VLR",
-      location: "BIP Fencing valioor ",
-      color: "#10b981",
-      bg: "#d1fae5",
+      name: "Kadambankulam",
+      code: "KBM",
+      location: "BIP Fencing Kadambankulam",
+      color: "#34d399",
     },
     {
       id: 2,
-      name: "Naguneri",
+      name: "Fencing Group",
       code: "NRI",
-      location: "BIP Fencing Naguneri",
-      color: "#1a5c38",
-      bg: "#d1fae5",
+      location: "BIP Fencing Fencing Group",
+      color: "#38bdf8",
     },
     {
       id: 3,
-      name: "Kadambakulam",
-      code: "KBM",
-      location: "BIP Fencing Kadambakulam",
-      color: "#f59e0b",
-      bg: "#fed7aa",
+      name: "Panagudi",
+      code: "PNG",
+      location: "BIP Fencing Panagudi",
+      color: "#c4b5fd",
     },
   ];
 
   const handleSubmit = () => {
     if (!selectedBranch) return;
+
     const branch = branches.find((b) => b.id === selectedBranch);
-    localStorage.setItem("admin_view_branch", selectedBranch);
+    if (!branch) return;
+
+    localStorage.setItem("admin_view_branch", String(selectedBranch));
     localStorage.setItem("admin_view_branch_name", branch.name);
     navigate("/dashboard");
   };
 
+  const handleViewAllBranches = () => {
+    localStorage.removeItem("admin_view_branch");
+    localStorage.removeItem("admin_view_branch_name");
+    navigate("/dashboard");
+  };
+
   return (
-    <div className="branch-selection-page">
+    <div className="branch-selection-page" style={{ "--fence": `url(${fenceBg})` }}>
       <div className="selection-container">
         <div className="selection-header">
           <div className="logo-wrapper">
             <div className="logo-icon">
-              <i className="bi bi-shield-lock-fill"></i>
+              <i className="bi bi-shield-lock-fill" aria-hidden="true"></i>
             </div>
             <h1>Bip Fencing Admin</h1>
             <p>SECURE ACCESS PORTAL</p>
@@ -64,18 +72,28 @@ export default function BranchSelection() {
               key={branch.id}
               className={`branch-card ${selectedBranch === branch.id ? "selected" : ""}`}
               onClick={() => setSelectedBranch(branch.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedBranch(branch.id);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedBranch === branch.id}
             >
               <div
                 className="branch-icon"
-                style={{ backgroundColor: branch.bg, color: branch.color }}
+                style={{ color: branch.color }}
               >
-                <i className="bi bi-shop"></i>
+                <i className="bi bi-shop" aria-hidden="true"></i>
               </div>
               <div className="branch-info">
                 <h3>{branch.name}</h3>
                 <span className="branch-code">{branch.code}</span>
                 <p className="branch-location">
-                  <i className="bi bi-geo-alt-fill"></i> {branch.location}
+                  <i className="bi bi-geo-alt-fill" aria-hidden="true"></i>
+                  {branch.location}
                 </p>
               </div>
               <div className="selection-indicator">
@@ -83,6 +101,7 @@ export default function BranchSelection() {
                   <i
                     className="bi bi-check-circle-fill"
                     style={{ color: branch.color }}
+                    aria-label="Selected"
                   ></i>
                 )}
               </div>
@@ -96,15 +115,9 @@ export default function BranchSelection() {
             onClick={handleSubmit}
             disabled={!selectedBranch}
           >
-            Continue to Dashboard <i className="bi bi-arrow-right-short"></i>
+            Continue to Dashboard <i className="bi bi-arrow-right-short" aria-hidden="true"></i>
           </button>
-          <button
-            className="btn-skip"
-            onClick={() => {
-              localStorage.removeItem("admin_view_branch");
-              navigate("/dashboard");
-            }}
-          >
+          <button className="btn-skip" onClick={handleViewAllBranches}>
             View All Branches
           </button>
         </div>
@@ -113,107 +126,88 @@ export default function BranchSelection() {
       <style>{`
         .branch-selection-page {
           min-height: 100vh;
-          background: linear-gradient(135deg, #0a1f13 0%, #1a3a27 100%);
+          position: relative;
           display: flex;
           align-items: center;
           justify-content: center;
           padding: 2rem;
           font-family: 'Inter', system-ui, -apple-system, sans-serif;
+          background:
+            linear-gradient(135deg, rgba(5, 25, 14, 0.55) 0%, rgba(10, 45, 26, 0.25) 100%),
+            var(--fence) center / cover no-repeat fixed;
+          overflow: hidden;
         }
 
         .selection-container {
-          max-width: 1200px;
+          position: relative;
+          max-width: 1100px;
           width: 100%;
-          background: white;
+          background: rgba(255, 255, 255, 0.05);
+          -webkit-backdrop-filter: blur(5px) saturate(140%);
+          backdrop-filter: blur(5px) saturate(140%);
+          border: 1px solid rgba(255, 255, 255, 0.28);
           border-radius: 32px;
-          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+          box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
           padding: 2.5rem;
+          color: #fff;
         }
 
-        .selection-header {
-          text-align: center;
-          margin-bottom: 2rem;
-        }
-
-        .logo-wrapper {
-          margin-bottom: 2rem;
-        }
+        .selection-header { text-align: center; margin-bottom: 2rem; }
+        .logo-wrapper { margin-bottom: 1.5rem; }
 
         .logo-icon {
-          width: 56px;
-          height: 56px;
-          background: linear-gradient(135deg, #1a3a27, #1a5c38);
+          width: 60px;
+          height: 60px;
+          background: rgba(255, 255, 255, 0.18);
+          border: 1px solid rgba(255, 255, 255, 0.4);
+          -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
           border-radius: 18px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           margin-bottom: 1rem;
-          box-shadow: 0 8px 16px rgba(26, 92, 56, 0.3);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
         }
+        .logo-icon i { font-size: 28px; color: #fff; }
 
-        .logo-icon i {
-          font-size: 28px;
-          color: white;
-        }
-
-        .selection-header h1 {
-          font-size: 24px;
-          font-weight: 800;
-          color: #0f172a;
-          margin: 0 0 0.25rem;
-        }
-
-        .selection-header > p,
-        .logo-wrapper > p {
-          font-size: 11px;
-          letter-spacing: 1.5px;
-          color: #64748b;
-          font-weight: 600;
-          margin: 0;
-        }
-
-        .selection-header h2 {
-          font-size: 28px;
-          font-weight: 700;
-          color: #0f172a;
-          margin: 1.5rem 0 0.5rem;
-        }
-
-        .subtext {
-          font-size: 15px;
-          color: #475569;
-          max-width: 500px;
-          margin: 0 auto;
-        }
+        .selection-header h1 { font-size: 26px; font-weight: 800; color: #fff; margin: 0 0 0.25rem; text-shadow: 0 2px 10px rgba(0,0,0,.35); }
+        .logo-wrapper > p { font-size: 11px; letter-spacing: 2px; color: rgba(255,255,255,.75); font-weight: 600; margin: 0; }
+        .selection-header h2 { font-size: 28px; font-weight: 700; color: #fff; margin: 1.5rem 0 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,.35); }
+        .subtext { font-size: 15px; color: rgba(255,255,255,.85); max-width: 520px; margin: 0 auto; }
 
         .branch-cards {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-          gap: 1.5rem;
-          margin-bottom: 2.5rem;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 1.25rem;
+          margin-bottom: 2.25rem;
         }
 
         .branch-card {
-          border: 2px solid #e2e8f0;
+          background: rgba(255, 255, 255, 0.08);
+          -webkit-backdrop-filter: blur(4px);
+          backdrop-filter: blur(4px);
+          border: 1px solid rgba(255, 255, 255, 0.3);
           border-radius: 20px;
-          padding: 1.5rem;
+          padding: 1.4rem;
           cursor: pointer;
           transition: all 0.25s ease;
           display: flex;
           align-items: flex-start;
           gap: 1rem;
-          background: white;
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
         }
-
         .branch-card:hover {
           transform: translateY(-4px);
-          border-color: #1a5c38;
-          box-shadow: 0 12px 24px -12px rgba(0, 0, 0, 0.15);
+          background: rgba(255, 255, 255, 0.22);
+          border-color: rgba(255, 255, 255, 0.55);
+          box-shadow: 0 14px 30px -10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,.4);
         }
-
+        .branch-card:focus-visible { outline: 3px solid #6ee7b7; outline-offset: 3px; }
         .branch-card.selected {
-          border-color: #1a5c38;
-          background: #f0fdf4;
+          background: rgba(52, 211, 153, 0.25);
+          border-color: #6ee7b7;
+          box-shadow: 0 0 0 2px rgba(110, 231, 183, 0.5), 0 14px 30px -10px rgba(0, 0, 0, 0.5);
         }
 
         .branch-icon {
@@ -224,55 +218,28 @@ export default function BranchSelection() {
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
+          background: rgba(255, 255, 255, 0.2);
+          border: 1px solid rgba(255, 255, 255, 0.35);
         }
-
         .branch-icon i { font-size: 24px; }
-
-        .branch-info { flex: 1; }
-
-        .branch-info h3 {
-          font-size: 18px;
-          font-weight: 700;
-          margin: 0 0 4px;
-          color: #0f172a;
-        }
-
+        .branch-info { flex: 1; min-width: 0; }
+        .branch-info h3 { font-size: 18px; font-weight: 700; margin: 0 0 4px; color: #fff; }
         .branch-code {
-          font-size: 11px;
-          font-weight: 600;
-          color: #475569;
-          background: #f1f5f9;
-          padding: 2px 8px;
-          border-radius: 20px;
-          display: inline-block;
-          margin-bottom: 8px;
+          font-size: 11px; font-weight: 700; color: #fff;
+          background: rgba(255, 255, 255, 0.2);
+          padding: 2px 9px; border-radius: 20px; display: inline-block; margin-bottom: 8px;
         }
-
-        .branch-location {
-          font-size: 13px;
-          color: #475569;
-          margin: 0;
-          display: flex;
-          align-items: center;
-          gap: 4px;
-        }
-
-        .branch-location i { font-size: 11px; color: #94a3b8; }
-
+        .branch-location { font-size: 13px; color: rgba(255,255,255,.85); margin: 0; display: flex; align-items: flex-start; gap: 4px; }
+        .branch-location i { font-size: 11px; color: rgba(255,255,255,.7); margin-top: 3px; }
         .selection-indicator { margin-left: auto; }
         .selection-indicator i { font-size: 22px; }
 
-        .selection-actions {
-          display: flex;
-          justify-content: center;
-          gap: 1rem;
-          flex-wrap: wrap;
-        }
+        .selection-actions { display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; }
 
         .btn-continue {
-          background: #1a5c38;
-          color: white;
-          border: none;
+          background: linear-gradient(135deg, #10b981, #059669);
+          color: #fff;
+          border: 1px solid rgba(255, 255, 255, 0.35);
           padding: 12px 28px;
           border-radius: 40px;
           font-size: 15px;
@@ -281,23 +248,18 @@ export default function BranchSelection() {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          transition: background 0.2s, transform 0.1s;
+          box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
+          transition: transform 0.15s, box-shadow 0.2s;
         }
-
-        .btn-continue:hover:not(:disabled) {
-          background: #164d2f;
-          transform: scale(1.02);
-        }
-
-        .btn-continue:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
+        .btn-continue:hover:not(:disabled) { transform: scale(1.03); box-shadow: 0 10px 26px rgba(5,150,105,.55); }
+        .btn-continue:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .btn-skip {
-          background: transparent;
-          color: #1e293b;
-          border: 1px solid #cbd5e1;
+          background: rgba(255, 255, 255, 0.14);
+          -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
+          color: #fff;
+          border: 1px solid rgba(255, 255, 255, 0.4);
           padding: 12px 28px;
           border-radius: 40px;
           font-size: 15px;
@@ -305,18 +267,14 @@ export default function BranchSelection() {
           cursor: pointer;
           transition: background 0.2s;
         }
-
-        .btn-skip:hover {
-          background: #f8fafc;
-          border-color: #94a3b8;
-        }
+        .btn-skip:hover { background: rgba(255, 255, 255, 0.26); }
 
         @media (max-width: 700px) {
-          .branch-selection-page { padding: 1rem; }
+          .branch-selection-page { padding: 1rem; background-attachment: scroll; }
           .selection-container { padding: 1.5rem; border-radius: 24px; }
           .branch-cards { grid-template-columns: 1fr; gap: 1rem; }
           .selection-header h2 { font-size: 22px; }
-          .selection-header h1 { font-size: 20px; }
+          .selection-header h1 { font-size: 21px; }
           .btn-continue, .btn-skip { width: 100%; justify-content: center; }
           .selection-actions { flex-direction: column; }
         }

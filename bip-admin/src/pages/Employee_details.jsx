@@ -1,6 +1,42 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../utils/api";
+
+const BRANCH_OPTIONS = ["Kadambankulam", "Panagudi", "Nanguneri"];
+const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+
+// Rate fields shown per branch
+const BRANCH_RATES = {
+  vallioor: [
+    ["kambi_kattu_rate", "Kambi Kattu Rate (₹)"],
+    ["others_rate", "Others Rate (₹)"],
+  ],
+  kadambankulam: [
+    ["kambi_kattu_rate", "Kambi Kattu Rate (₹)"],
+    ["others_rate", "Others Rate (₹)"],
+  ],
+  nanguneri: [
+    ["food_rate", "Food (₹)"],
+    ["ot_rate", "OT (₹)"],
+  ],
+  panagudi: [
+    ["loading_rate", "Loading Rate (₹ per pack)"],
+    ["unloading_rate", "Unloading Rate (₹ per pack)"],
+    ["location_change_rate", "Location Change (₹)"],
+  ],
+};
+const ALL_RATE_KEYS = ["food_rate", "ot_rate", "kambi_kattu_rate", "others_rate", "loading_rate", "unloading_rate", "location_change_rate"];
+const ratesFor = (branch) => BRANCH_RATES[(branch || "").toLowerCase()] || [];
+
+// Pre-select the branch chosen in the topbar
+const topbarBranch = () => {
+  const n = (localStorage.getItem("admin_view_branch_name") || "").toLowerCase();
+  const id = (localStorage.getItem("admin_view_branch") || "").trim();
+  const byId = { 1: "Kadambankulam", 2: "Nanguneri", 3: "Panagudi" }[id];
+  return BRANCH_OPTIONS.find((b) => b.toLowerCase() === (n === "vallioor" ? "kadambankulam" : n)) || byId || "";
+};
+import PhoneInput from "../components/PhoneInput";
 
 const getHeaders = () => {
   const headers = {
@@ -18,6 +54,7 @@ const getHeaders = () => {
 };
 
 const Employee_details = () => {
+  const navigate = useNavigate();
   const { logout } = useAuth();
   const userRole = localStorage.getItem("role");
   const isBranchSelected =
@@ -58,17 +95,61 @@ const Employee_details = () => {
 
   const emptyForm = {
     employee_name: "",
-    gender: "",
+    gender: "Male",
     whatsapp_number: "",
     address: "",
+    branch_name: topbarBranch(),
     salary_type: "",
+    salary_amount: "",
     price_per_bags: "",
+    petrol_allowance: "",
+    tea_allowance: "",
+    loading_rate: "",
+    unloading_rate: "",
+    location_change_rate: "",
+    kambi_kattu_rate: "",
+    others_rate: "",
+    food_rate: "",
+    ot_rate: "",
     date_of_joining: getTodayYMD(),
   };
   const [formData, setFormData] = useState(emptyForm);
   const [editId, setEditId] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [allEmployees, setAllEmployees] = useState([]);
+  const [showSuggest, setShowSuggest] = useState(false);
+
+  const loadAllEmployees = async () => {
+    try {
+      const res = await apiFetch("/employees/get_employees.php?simple=1");
+      const data = await res.json();
+      setAllEmployees(Array.isArray(data) ? data : []);
+    } catch (_) {
+      setAllEmployees([]);
+    }
+  };
+  useEffect(() => {
+    loadAllEmployees();
+  }, []);
+
+  const nameSuggestions = filters.name.trim()
+    ? allEmployees
+        .filter((e) =>
+          (e.employee_name || "")
+            .toLowerCase()
+            .includes(filters.name.trim().toLowerCase()),
+        )
+        .slice(0, 8)
+    : [];
+
+  const handlePickEmployee = (emp) => {
+    const newFilters = { ...filters, name: emp.employee_name };
+    setFilters(newFilters);
+    setShowSuggest(false);
+    fetchEmployees(1, pagination.limit, newFilters, true);
+    handleEdit(emp);
+  };
 
   const showToast = (message, type = "success") => {
     setToast({ show: true, message, type });
@@ -145,8 +226,19 @@ const Employee_details = () => {
     fetchEmployees(1, newLimit, null, true);
   };
 
+  // Panagudi: Price per Pack = Salary ÷ 3 (auto)
+  const PANAGUDI_PACKS = 3;
   const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    const next = { ...formData, [name]: value };
+    if (
+      (name === "salary_amount" || name === "branch_name") &&
+      (next.branch_name || "").toLowerCase() === "panagudi" &&
+      Number(next.salary_amount) > 0
+    ) {
+      next.price_per_bags = Number(next.salary_amount) / PANAGUDI_PACKS; // no rounding: 333.3333333333333
+    }
+    setFormData(next);
   };
 
   const resetForm = () => {
@@ -156,11 +248,8 @@ const Employee_details = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!isBranchSelected && userRole === "admin") {
-      showToast(
-        "Please select a specific branch from the topbar before adding an employee.",
-        "error",
-      );
+    if (!editId && !formData.branch_name) {
+      showToast("Please select a branch.", "error");
       return;
     }
     // Validate gender
@@ -200,6 +289,7 @@ const Employee_details = () => {
         );
         resetForm();
         setShowModal(false);
+        loadAllEmployees();
         fetchEmployees(pagination.page, pagination.limit);
         setActiveTab("records");
       } else {
@@ -223,11 +313,25 @@ const Employee_details = () => {
   const handleEdit = (emp) => {
     setFormData({
       employee_name: emp.employee_name,
-      gender: emp.gender || "",
+      gender: emp.gender || "Male",
       whatsapp_number: emp.whatsapp_number || emp.phone_number || "",
       address: emp.address || "",
+      branch_name:
+        BRANCH_OPTIONS.find(
+          (b) => b.toLowerCase() === ((emp.branch_name || "").toLowerCase() === "vallioor" ? "kadambankulam" : (emp.branch_name || "").toLowerCase()),
+        ) || "",
       salary_type: emp.salary_type,
+      salary_amount: emp.salary_amount ?? "",
       price_per_bags: emp.price_per_bags || "",
+      petrol_allowance: emp.petrol_allowance ?? "",
+      tea_allowance: emp.tea_allowance ?? "",
+      loading_rate: emp.loading_rate ?? "",
+      unloading_rate: emp.unloading_rate ?? "",
+      location_change_rate: emp.location_change_rate ?? "",
+      kambi_kattu_rate: emp.kambi_kattu_rate ?? "",
+      others_rate: emp.others_rate ?? "",
+      food_rate: emp.food_rate ?? "",
+      ot_rate: emp.ot_rate ?? "",
       date_of_joining: emp.date_of_joining,
     });
     setEditId(emp.id);
@@ -380,13 +484,6 @@ const Employee_details = () => {
       {/* Add Form */}
       {activeTab === "add" && (
         <form onSubmit={handleSubmit} className="ep-form-wrap">
-          {!isBranchSelected && userRole === "admin" && (
-            <div className="ep-alert">
-              <i className="bi bi-exclamation-triangle-fill"></i>
-              Please select a specific branch (Valioor, Naguneri or Kadambakulam) from the
-              topbar to add an employee.
-            </div>
-          )}
           <div className="ep-card">
             <div className="ep-card__head">
               <i className="bi bi-person-vcard"></i>
@@ -407,26 +504,54 @@ const Employee_details = () => {
                   req: true,
                   type: "text",
                 },
-                { name: "address", label: "Address", req: false, type: "text" },
               ].map((f) => (
                 <div className="ep-fg" key={f.name}>
                   <label className="ep-label">
                     {f.label}
                     {f.req && <span className="ep-req">*</span>}
                   </label>
-                  <input
-                    type={f.type}
-                    name={f.name}
-                    value={formData[f.name]}
-                    onChange={handleChange}
-                    required={f.req}
-                    disabled={!isBranchSelected && userRole === "admin"}
-                    className="ep-input"
-                    placeholder={`Enter ${f.label.toLowerCase()}`}
-                  />
+                  {f.name === "whatsapp_number" ? (
+                    <PhoneInput
+                      name={f.name}
+                      value={formData[f.name]}
+                      onChange={handleChange}
+                      required={f.req}
+                      className="ep-input"
+                    />
+                  ) : (
+                    <input
+                      type={f.type}
+                      name={f.name}
+                      value={formData[f.name]}
+                      onChange={handleChange}
+                      required={f.req}
+                      className="ep-input"
+                      placeholder={`Enter ${f.label.toLowerCase()}`}
+                    />
+                  )}
                   {f.hint && <span className="ep-hint">{f.hint}</span>}
                 </div>
               ))}
+
+              <div className="ep-fg">
+                <label className="ep-label">
+                  Branch<span className="ep-req">*</span>
+                </label>
+                <select
+                  name="branch_name"
+                  value={formData.branch_name}
+                  onChange={handleChange}
+                  required
+                  className="ep-input"
+                >
+                  <option value="">Select branch</option>
+                  {BRANCH_OPTIONS.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               <div className="ep-fg">
                 <label className="ep-label">
@@ -437,10 +562,8 @@ const Employee_details = () => {
                   value={formData.gender}
                   onChange={handleChange}
                   required
-                  disabled={!isBranchSelected && userRole === "admin"}
                   className="ep-input"
                 >
-                  <option value="">Select gender</option>
                   <option value="Male">Male</option>
                   <option value="Female">Female</option>
                   <option value="Other">Other</option>
@@ -456,7 +579,6 @@ const Employee_details = () => {
                   value={formData.salary_type}
                   onChange={handleChange}
                   required
-                  disabled={!isBranchSelected && userRole === "admin"}
                   className="ep-input"
                 >
                   <option value="">Select salary type</option>
@@ -467,17 +589,74 @@ const Employee_details = () => {
               </div>
 
               <div className="ep-fg">
-                <label className="ep-label">Price per Bags</label>
+                <label className="ep-label">Salary (₹)</label>
+                <input
+                  type="number"
+                  name="salary_amount"
+                  value={formData.salary_amount}
+                  onChange={handleChange}
+                  min="0"
+                  step="any"
+                  className="ep-input"
+                  placeholder="Enter salary amount"
+                />
+              </div>
+
+              <div className="ep-fg">
+                <label className="ep-label">Price per Pack (₹)</label>
                 <input
                   type="number"
                   name="price_per_bags"
                   value={formData.price_per_bags}
                   onChange={handleChange}
                   min="0"
-                  step="0.01"
-                  disabled={!isBranchSelected && userRole === "admin"}
+                  step="any"
                   className="ep-input"
-                  placeholder="Enter price per bags"
+                  placeholder="Enter price per pack"
+                />
+              </div>
+
+              {ratesFor(formData.branch_name).map(([name, label]) => (
+                <div className="ep-fg" key={name}>
+                  <label className="ep-label">{label}</label>
+                  <input
+                    type="number"
+                    name={name}
+                    value={formData[name]}
+                    onChange={handleChange}
+                    min="0"
+                    step="any"
+                    className="ep-input"
+                    placeholder="0"
+                  />
+                </div>
+              ))}
+
+              <div className="ep-fg">
+                <label className="ep-label">Petrol Allowance (₹)</label>
+                <input
+                  type="number"
+                  name="petrol_allowance"
+                  value={formData.petrol_allowance}
+                  onChange={handleChange}
+                  min="0"
+                  step="any"
+                  className="ep-input"
+                  placeholder="Enter petrol amount"
+                />
+              </div>
+
+              <div className="ep-fg">
+                <label className="ep-label">Tea Allowance (₹)</label>
+                <input
+                  type="number"
+                  name="tea_allowance"
+                  value={formData.tea_allowance}
+                  onChange={handleChange}
+                  min="0"
+                  step="any"
+                  className="ep-input"
+                  placeholder="Enter tea amount"
                 />
               </div>
 
@@ -491,14 +670,13 @@ const Employee_details = () => {
                   value={formData.date_of_joining}
                   onChange={handleChange}
                   required
-                  disabled={!isBranchSelected && userRole === "admin"}
                   className="ep-input"
                 />
               </div>
             </div>
           </div>
 
-          {isBranchSelected && (
+          {(
             <div className="ep-form-actions">
               <button
                 type="button"
@@ -533,9 +711,31 @@ const Employee_details = () => {
                 name="name"
                 placeholder="Search by name…"
                 value={filters.name}
-                onChange={handleFilterChange}
+                onChange={(e) => {
+                  handleFilterChange(e);
+                  setShowSuggest(true);
+                }}
+                onFocus={() => setShowSuggest(true)}
+                onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+                autoComplete="off"
                 className="ep-filter-input ep-filter-input--icon"
               />
+              {showSuggest && nameSuggestions.length > 0 && (
+                <ul className="ep-suggest">
+                  {nameSuggestions.map((emp) => (
+                    <li
+                      key={emp.id}
+                      onMouseDown={() => handlePickEmployee(emp)}
+                    >
+                      <span>{emp.employee_name}</span>
+                      <small>
+                        {emp.branch_name || ""}
+                        {emp.whatsapp_number ? ` · ${emp.whatsapp_number}` : ""}
+                      </small>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <select
               name="salary_type"
@@ -595,7 +795,12 @@ const Employee_details = () => {
                       <th>Employee</th>
                       <th>WhatsApp</th>
                       <th>Salary Type</th>
-                      <th>Price per Bags</th>
+                      <th>Branch</th>
+                      <th>Salary</th>
+                      <th>Price / Pack</th>
+                      <th>Rates</th>
+                      <th>Petrol</th>
+                      <th>Tea</th>
                       {userRole === "admin" && <th>Actions</th>}
                     </tr>
                   </thead>
@@ -639,6 +844,8 @@ const Employee_details = () => {
                             </div>
                           </td>
                           <td>{salaryBadge(emp.salary_type)}</td>
+                          <td>{emp.branch_name || "—"}</td>
+                          <td>{Number(emp.salary_amount) > 0 ? `₹${Number(emp.salary_amount).toLocaleString("en-IN")}` : "—"}</td>
                           <td>
                             {emp.price_per_bags != null &&
                             emp.price_per_bags !== "" ? (
@@ -650,17 +857,37 @@ const Employee_details = () => {
                                 }}
                               >
                                 ₹
-                                {Number(emp.price_per_bags).toLocaleString(
-                                  "en-IN",
-                                )}
+                                {Number(emp.price_per_bags).toLocaleString("en-IN", { maximumFractionDigits: 15 })}
                               </span>
                             ) : (
                               <span className="ep-nil">—</span>
                             )}
                           </td>
+                          <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>
+                            {ratesFor(emp.branch_name).length
+                              ? ratesFor(emp.branch_name).map(([k, label]) => (
+                                  <div key={k}>
+                                    {label.replace(/ Rate| \(.*\)/g, "")}: <b style={{ fontFamily: "monospace" }}>{money(emp[k])}</b>
+                                  </div>
+                                ))
+                              : "—"}
+                          </td>
+                          <td style={{ fontFamily: "monospace", fontWeight: 700, color: "#b45309" }}>
+                            {money(emp.petrol_allowance)}
+                          </td>
+                          <td style={{ fontFamily: "monospace", fontWeight: 700, color: "#0369a1" }}>
+                            {money(emp.tea_allowance)}
+                          </td>
                           {userRole === "admin" && (
                             <td>
                               <div className="ep-actions">
+                                <button
+                                  className="ep-action-btn ep-action-btn--stmt"
+                                  onClick={() => navigate(`/statements?type=employee&employee_id=${emp.id}`)}
+                                  title="Statement"
+                                >
+                                  <i className="bi bi-journal-text"></i>
+                                </button>
                                 <button
                                   className="ep-action-btn ep-action-btn--edit"
                                   onClick={() => handleEdit(emp)}
@@ -683,7 +910,7 @@ const Employee_details = () => {
                     ) : (
                       <tr>
                         <td
-                          colSpan={userRole === "admin" ? 6 : 5}
+                          colSpan={userRole === "admin" ? 11 : 10}
                           className="ep-empty"
                         >
                           <div className="ep-empty-inner">
@@ -808,21 +1035,52 @@ const Employee_details = () => {
             </div>
 
             <div className="ep-modal__body">
-              {Object.keys(emptyForm).map((key) => (
+              {Object.keys(emptyForm)
+                .filter(
+                  (key) =>
+                    !ALL_RATE_KEYS.includes(key) ||
+                    ratesFor(formData.branch_name).some(([k]) => k === key),
+                )
+                .map((key) => (
                 <div className="ep-fg" key={key}>
                   <label className="ep-label">
-                    {key
-                      .replace(/_/g, " ")
-                      .replace(/\b\w/g, (c) => c.toUpperCase())}
+                    {({
+                      salary_amount: "Salary (₹)",
+                      price_per_bags: "Price per Pack (₹)",
+                      loading_rate: "Loading Rate (₹ per pack)",
+                      unloading_rate: "Unloading Rate (₹ per pack)",
+                      location_change_rate: "Location Change (₹)",
+                      kambi_kattu_rate: "Kambi Kattu Rate (₹)",
+                      others_rate: "Others Rate (₹)",
+                      food_rate: "Food (₹)",
+                      ot_rate: "OT (₹)",
+                    })[key] ||
+                      key
+                        .replace(/_/g, " ")
+                        .replace(/\b\w/g, (c) => c.toUpperCase())}
                   </label>
-                  {key === "gender" ? (
+                  {key === "branch_name" ? (
                     <select
                       name={key}
                       value={formData[key] || ""}
                       onChange={handleChange}
                       className="ep-input"
+                      disabled={userRole !== "admin"}
                     >
-                      <option value="">Select gender</option>
+                      <option value="">Select branch</option>
+                      {BRANCH_OPTIONS.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                  ) : key === "gender" ? (
+                    <select
+                      name={key}
+                      value={formData[key] || "Male"}
+                      onChange={handleChange}
+                      className="ep-input"
+                    >
                       <option value="Male">Male</option>
                       <option value="Female">Female</option>
                       <option value="Other">Other</option>
@@ -847,16 +1105,16 @@ const Employee_details = () => {
                       onChange={handleChange}
                       className="ep-input"
                     />
-                  ) : key === "price_per_bags" ? (
+                  ) : ["salary_amount", "price_per_bags", "petrol_allowance", "tea_allowance", ...ALL_RATE_KEYS].includes(key) ? (
                     <input
                       type="number"
                       name={key}
                       value={formData[key] || ""}
                       onChange={handleChange}
                       min="0"
-                      step="0.01"
+                      step="any"
                       className="ep-input"
-                      placeholder="Enter price per bags"
+                      placeholder="0"
                     />
                   ) : (
                     <input
@@ -1141,6 +1399,18 @@ const Employee_details = () => {
           margin-bottom: 22px;
           align-items: center;
         }
+        .ep-suggest {
+          position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 50;
+          list-style: none; margin: 0; padding: 4px; background: #fff;
+          border: 1px solid #e2e8f0; border-radius: 10px;
+          box-shadow: 0 8px 24px rgba(15,23,42,.12); max-height: 260px; overflow-y: auto;
+        }
+        .ep-suggest li {
+          display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
+          border-radius: 8px; cursor: pointer; font-size: 14px;
+        }
+        .ep-suggest li:hover { background: #f0fdf4; }
+        .ep-suggest li small { color: #64748b; font-size: 12px; }
         .ep-filter-group {
           position: relative;
           width: 100%;
@@ -1174,6 +1444,7 @@ const Employee_details = () => {
         /* ── Table ── */
         .ep-table-wrap {
           overflow-x: auto;
+          scrollbar-width: thin;
           border-radius: 10px;
           border: 1.5px solid #e2e8f0;
         }
@@ -1185,8 +1456,10 @@ const Employee_details = () => {
         .ep-table thead tr {
           background: #f8fafc;
         }
+        .ep-table-wrap::-webkit-scrollbar { display: block; height: 8px; }
+        .ep-table-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
         .ep-table th {
-          padding: 12px 16px;
+          padding: 12px 12px;
           text-align: left;
           font-size: 12px;
           font-weight: 700;
@@ -1197,7 +1470,7 @@ const Employee_details = () => {
           border-bottom: 1.5px solid #e2e8f0;
         }
         .ep-table td {
-          padding: 14px 16px;
+          padding: 12px 12px;
           border-bottom: 1px solid #f1f5f9;
           color: #1e293b;
           vertical-align: middle;
@@ -1252,6 +1525,8 @@ const Employee_details = () => {
           transition: transform .12s, box-shadow .12s;
         }
         .ep-action-btn:hover { transform: scale(1.08); }
+        .ep-action-btn--stmt { background: #ecfdf5; color: #008b3e; }
+        .ep-action-btn--stmt:hover { background: #d1fae5; box-shadow: 0 2px 8px rgba(0,139,62,.18); }
         .ep-action-btn--edit { background: #eff6ff; color: #2563eb; }
         .ep-action-btn--edit:hover { background: #dbeafe; box-shadow: 0 2px 8px rgba(37,99,235,.18); }
         .ep-action-btn--delete { background: #fef2f2; color: #dc2626; }

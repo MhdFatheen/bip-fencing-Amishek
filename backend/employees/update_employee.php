@@ -1,142 +1,54 @@
 <?php
 require_once __DIR__ . '/../auth_middleware.php';
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/_employee_common.php';
 
-if ($_SERVER['REQUEST_METHOD'] !== 'PUT') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
-}
+if ($_SERVER['REQUEST_METHOD'] !== 'PUT') jsonFail('Method not allowed', 405);
 
 $id = (int)($_GET['id'] ?? 0);
-if (!$id) {
-    http_response_code(400);
-    echo json_encode(['error' => 'Employee ID required']);
-    exit;
-}
+if (!$id) jsonFail('Employee ID required');
 
 $body = json_decode(file_get_contents('php://input'), true);
-if (!$body) {
-    http_response_code(400);
-    echo json_encode(['error' => 'Invalid JSON']);
-    exit;
-}
-
-$name    = trim($body['employee_name'] ?? '');
-$empId   = trim($body['emp_id'] ?? '');
-$dept    = trim($body['department'] ?? '');
-$dest    = trim($body['destination'] ?? '');
-$gender  = trim($body['gender'] ?? '');
-$email   = trim($body['email'] ?? '');
-$phone   = trim($body['phone_number'] ?? '');
-$address = trim($body['address'] ?? '');
-$salType = trim($body['salary_type'] ?? '');
-$doj     = trim($body['date_of_joining'] ?? '');
-
-if (!$name || !$empId || !$dept || !$salType || !$doj) {
-    http_response_code(422);
-    echo json_encode(['error' => 'Missing required fields']);
-    exit;
-}
+if (!is_array($body)) jsonFail('Invalid JSON');
 
 $db = getDB();
 
-/* --------------------------------------------------
-   Permission check
----------------------------------------------------*/
+// Permission: non-admin can only edit own-branch employees, and cannot move branch
 if ($authUser['role'] !== 'admin') {
-    $check = $db->prepare(
-        "SELECT id
-         FROM employees
-         WHERE id = ? AND branch_id = ?"
-    );
-    $check->bind_param("ii", $id, $authUser['branch_id']);
-    $check->execute();
-
-    if (!$check->get_result()->fetch_assoc()) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Access denied']);
-        exit;
-    }
-
-    $check->close();
+    $st = $db->prepare("SELECT id FROM employees WHERE id = ? AND branch_id = ?");
+    $bid = (int)$authUser['branch_id'];
+    $st->bind_param('ii', $id, $bid);
+    $st->execute();
+    if (!$st->get_result()->fetch_assoc()) jsonFail('Access denied', 403);
+    $st->close();
+    unset($body['branch_name']);
 }
 
-/* --------------------------------------------------
-   Check duplicate Employee ID / Phone Number
----------------------------------------------------*/
-$duplicate = $db->prepare(
-    "SELECT id
-     FROM employees
-     WHERE (emp_id = ? OR phone_number = ?)
-     AND id != ?"
-);
+$cols = tableColumns($db, 'employees');
+$data = employeeData($db, $body, $cols, false);
 
-$duplicate->bind_param(
-    "ssi",
-    $empId,
-    $phone,
-    $id
-);
+// Duplicate name / WhatsApp check (other employees)
+$phoneCol = isset($data['whatsapp_number']) ? 'whatsapp_number' : (isset($data['phone_number']) ? 'phone_number' : null);
+$sql = "SELECT id FROM employees WHERE id <> ? AND (employee_name = ?";
+$params = [$id, $data['employee_name']];
+if ($phoneCol && $data[$phoneCol] !== '') { $sql .= " OR `$phoneCol` = ?"; $params[] = $data[$phoneCol]; }
+$sql .= ")";
+$st = $db->prepare($sql);
+$st->bind_param('i' . str_repeat('s', count($params) - 1), ...$params);
+$st->execute();
+if ($st->get_result()->num_rows > 0) jsonFail('Employee name or WhatsApp number already exists.', 409);
+$st->close();
 
-$duplicate->execute();
+$set  = implode(', ', array_map(fn($k) => "`$k` = ?", array_keys($data)));
+$vals = array_values($data);
+$vals[] = $id;
+$st = $db->prepare("UPDATE employees SET $set WHERE id = ?");
+$st->bind_param(bindTypes($vals), ...$vals);
 
-if ($duplicate->get_result()->num_rows > 0) {
-    http_response_code(409);
-    echo json_encode([
-        'error' => 'Employee ID or Mobile Number already exists.'
-    ]);
-    exit;
-}
-
-$duplicate->close();
-
-/* --------------------------------------------------
-   Update employee
----------------------------------------------------*/
-$stmt = $db->prepare(
-    "UPDATE employees
-     SET
-        employee_name = ?,
-        emp_id = ?,
-        department = ?,
-        destination = ?,
-        gender = ?,
-        email = ?,
-        phone_number = ?,
-        address = ?,
-        salary_type = ?,
-        date_of_joining = ?
-     WHERE id = ?"
-);
-
-$stmt->bind_param(
-    "ssssssssssi",
-    $name,
-    $empId,
-    $dept,
-    $dest,
-    $gender,
-    $email,
-    $phone,
-    $address,
-    $salType,
-    $doj,
-    $id
-);
-
-if ($stmt->execute()) {
-    echo json_encode([
-        'success' => true,
-        'message' => 'Employee updated successfully'
-    ]);
+if ($st->execute()) {
+    echo json_encode(['success' => true, 'message' => 'Employee updated successfully']);
 } else {
-    http_response_code(500);
-    echo json_encode([
-        'error' => $stmt->error
-    ]);
+    jsonFail($st->error, 500);
 }
-
-$stmt->close();
+$st->close();
 $db->close();
-?>
