@@ -26,12 +26,14 @@ export default function Topbar() {
       try {
         const user = JSON.parse(userStr);
         setUserName(user.full_name || user.username || "User");
+        // display name comes from the branch id (1/2/3); ids and DB values are untouched
+        const shownBranch = user.branch_id ? branchLabel(user.branch_id) : branchLabel(user.branch_name || "");
         setUserRole(
           user.role === "admin"
             ? "Administrator"
-            : user.branch_name || "Branch User",
+            : shownBranch || "Branch User",
         );
-        setBranchName(user.branch_name || "");
+        setBranchName(shownBranch || "");
       } catch (e) {}
     }
     const role = localStorage.getItem("role");

@@ -89,6 +89,32 @@ function syncFromAttendance(PDO $pdo, $scope) {
         WHERE 1=1 $w")->execute($p);
 }
 
+// ── Permissions: branch users may ADD records only ─────────────
+//    Editing / deleting salary records is administrator-only (checked on the
+//    authenticated user's role from the session, not on any name or header).
+$ADMIN_ONLY_ACTIONS = [
+    'delete_day', 'delete_ot', 'delete_payment',
+    'update_sale', 'adjust_bags', 'update_bags_count',
+    'adjust_ot_quantity', 'update_ot_quantity',
+];
+if (($authUser['role'] ?? '') !== 'admin' && in_array($action, $ADMIN_ONLY_ACTIONS, true)) {
+    fail('Only an administrator can edit or delete salary records', 403);
+}
+
+// An entry that already holds saved salary data cannot be overwritten by a branch user
+function dayIsFilled(PDO $pdo, int $employeeId, string $date): bool {
+    $st = $pdo->prepare("SELECT * FROM salary_days WHERE employee_id = ? AND date = ? LIMIT 1");
+    $st->execute([$employeeId, $date]);
+    $d = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$d) return false;
+    foreach (['salary_amount','pack_count','total_amount','petrol','tea','advance','kambi_amount','others_amount',
+              'loading_amount','unloading_amount','location_change','food_amount','ot_day_amount','extra_amount',
+              'work_amount','ot_amount'] as $k) {
+        if (isset($d[$k]) && (float)$d[$k] != 0.0) return true;
+    }
+    return false;
+}
+
 try {
     switch ($action) {
 
@@ -192,6 +218,9 @@ try {
         if (!in_array($status, ['Present', 'Absent', 'Half Day'], true)) fail('Status must be Present, Half Day or Absent');
         if (empty($in['employee_id']) || empty($in['date'])) fail('Employee and date are required');
         $emp = findEmployee($pdo, $in['employee_id'], $scope);
+        if (($authUser['role'] ?? '') !== 'admin' && dayIsFilled($pdo, (int)$emp['id'], (string)$in['date'])) {
+            fail('Only an administrator can edit saved salary records', 403);
+        }
         // Amounts are auto-calculated on the page from the employee's rates (editable there)
         // Loading / Unloading = qty typed on the page × employee rate
         $loadQty   = max(0, (float)($in['loading_qty'] ?? 0));
@@ -255,6 +284,9 @@ try {
         if (!in_array($status, ['Present', 'Absent', 'Half Day'], true)) fail('Status must be Present, Half Day or Absent');
         if (empty($in['employee_id']) || empty($in['date'])) fail('Employee and date are required');
         $emp = findEmployee($pdo, $in['employee_id'], $scope);
+        if (($authUser['role'] ?? '') !== 'admin' && dayIsFilled($pdo, (int)$emp['id'], (string)$in['date'])) {
+            fail('Only an administrator can edit saved salary records', 403);
+        }
         $pdo->prepare("INSERT INTO salary_days (employee_id, date, attendance_status, branch_id) VALUES (?,?,?,?)
                        ON DUPLICATE KEY UPDATE attendance_status = VALUES(attendance_status)")
             ->execute([$emp['id'], $in['date'], $status, $emp['branch_id']]);

@@ -18,6 +18,15 @@ const OLD_NAMES = {
   bra: "Kadambankulam",
   brb: "Fencing Group",
   brc: "Panagudi",
+  // spellings that may still be stored in the database
+  vallioor: "Kadambankulam",
+  valioor: "Kadambankulam",
+  kadambankulam: "Kadambankulam",
+  kadambakulam: "Kadambankulam",
+  nanguneri: "Fencing Group",
+  naguneri: "Fencing Group",
+  "fencing group": "Fencing Group",
+  panagudi: "Panagudi",
 };
 
 // Accepts a branch id (1 / "1") or a stored name ("Branch A") and

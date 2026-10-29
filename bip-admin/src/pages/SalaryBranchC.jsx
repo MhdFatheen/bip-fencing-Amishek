@@ -13,7 +13,7 @@ const SMS_ENABLED = false;
 
 const VARIANTS = {
   B: {
-    title: "Salary — Nanguneri",
+    title: "Salary — Fencing Group",
     packs: true,
     petrolTea: true,
     extra: true,
@@ -21,7 +21,7 @@ const VARIANTS = {
     items: [],
   },
   A: {
-    title: "Salary — Vallioor",
+    title: "Salary — Kadambankulam",
     packs: true,
     petrolTea: true,
     items: [
@@ -688,9 +688,11 @@ export default function SalaryBranchC({ variant = "C" }) {
                       </td>
                       <td>
                         <div className="sp-row-actions">
-                          <button className="sp-icon-btn" onClick={() => handleEdit(r)} title="Edit">
-                            <i className="bi bi-pencil-fill"></i>
-                          </button>
+                          {isAdmin && (
+                            <button className="sp-icon-btn" onClick={() => handleEdit(r)} title="Edit">
+                              <i className="bi bi-pencil-fill"></i>
+                            </button>
+                          )}
                           {isAdmin && (
                             <button
                               className="sp-icon-btn sp-icon-btn--del"
