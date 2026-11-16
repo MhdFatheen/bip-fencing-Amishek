@@ -3,20 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../utils/api";
 
-const BRANCH_OPTIONS = ["Kadambankulam", "Panagudi", "Nanguneri"];
+const BRANCH_OPTIONS = ["Kadambankulam", "Panagudi", "Fencing Group"];
 const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
 
 // Rate fields shown per branch
 const BRANCH_RATES = {
-  vallioor: [
-    ["kambi_kattu_rate", "Kambi Kattu Rate (₹)"],
-    ["others_rate", "Others Rate (₹)"],
-  ],
   kadambankulam: [
     ["kambi_kattu_rate", "Kambi Kattu Rate (₹)"],
     ["others_rate", "Others Rate (₹)"],
   ],
-  nanguneri: [
+  "fencing group": [
     ["food_rate", "Food (₹)"],
     ["ot_rate", "OT (₹)"],
   ],
@@ -24,17 +20,23 @@ const BRANCH_RATES = {
     ["loading_rate", "Loading Rate (₹ per pack)"],
     ["unloading_rate", "Unloading Rate (₹ per pack)"],
     ["location_change_rate", "Location Change (₹)"],
+    ["kambi_kattu_rate", "Kambi Kattu Rate (₹)"],
   ],
 };
 const ALL_RATE_KEYS = ["food_rate", "ot_rate", "kambi_kattu_rate", "others_rate", "loading_rate", "unloading_rate", "location_change_rate"];
-const ratesFor = (branch) => BRANCH_RATES[(branch || "").toLowerCase()] || [];
+// old names still work: Vallioor = Kadambankulam, Nanguneri = Fencing Group
+const BRANCH_ALIAS = { vallioor: "kadambankulam", nanguneri: "fencing group" };
+const ratesFor = (branch) => {
+  const k = (branch || "").toLowerCase().trim();
+  return BRANCH_RATES[BRANCH_ALIAS[k] || k] || [];
+};
 
 // Pre-select the branch chosen in the topbar
 const topbarBranch = () => {
   const n = (localStorage.getItem("admin_view_branch_name") || "").toLowerCase();
   const id = (localStorage.getItem("admin_view_branch") || "").trim();
-  const byId = { 1: "Kadambankulam", 2: "Nanguneri", 3: "Panagudi" }[id];
-  return BRANCH_OPTIONS.find((b) => b.toLowerCase() === (n === "vallioor" ? "kadambankulam" : n)) || byId || "";
+  const byId = { 1: "Kadambankulam", 2: "Fencing Group", 3: "Panagudi" }[id];
+  return BRANCH_OPTIONS.find((b) => b.toLowerCase() === (BRANCH_ALIAS[n] || n)) || byId || "";
 };
 import PhoneInput from "../components/PhoneInput";
 
@@ -56,6 +58,17 @@ const getHeaders = () => {
 const Employee_details = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  // Employee details statement (printable list of saved employee details)
+  const [empStmt, setEmpStmt] = useState(null);
+  const openAllStatement = async () => {
+    try {
+      const res = await apiFetch("/employees/get_employees.php?simple=1");
+      const data = await res.json();
+      setEmpStmt(Array.isArray(data) ? data : data.employees || []);
+    } catch {
+      setEmpStmt(employees);
+    }
+  };
   const userRole = localStorage.getItem("role");
   const isBranchSelected =
     userRole === "admin" ? !!localStorage.getItem("admin_view_branch") : true;
@@ -104,6 +117,7 @@ const Employee_details = () => {
     price_per_bags: "",
     petrol_allowance: "",
     tea_allowance: "",
+    extra_rate: "",
     loading_rate: "",
     unloading_rate: "",
     location_change_rate: "",
@@ -318,13 +332,14 @@ const Employee_details = () => {
       address: emp.address || "",
       branch_name:
         BRANCH_OPTIONS.find(
-          (b) => b.toLowerCase() === ((emp.branch_name || "").toLowerCase() === "vallioor" ? "kadambankulam" : (emp.branch_name || "").toLowerCase()),
+          (b) => b.toLowerCase() === (BRANCH_ALIAS[(emp.branch_name || "").toLowerCase()] || (emp.branch_name || "").toLowerCase()),
         ) || "",
       salary_type: emp.salary_type,
       salary_amount: emp.salary_amount ?? "",
       price_per_bags: emp.price_per_bags || "",
       petrol_allowance: emp.petrol_allowance ?? "",
       tea_allowance: emp.tea_allowance ?? "",
+      extra_rate: emp.extra_rate ?? "",
       loading_rate: emp.loading_rate ?? "",
       unloading_rate: emp.unloading_rate ?? "",
       location_change_rate: emp.location_change_rate ?? "",
@@ -661,6 +676,20 @@ const Employee_details = () => {
               </div>
 
               <div className="ep-fg">
+                <label className="ep-label">Extra (₹)</label>
+                <input
+                  type="number"
+                  name="extra_rate"
+                  value={formData.extra_rate}
+                  onChange={handleChange}
+                  min="0"
+                  step="any"
+                  className="ep-input"
+                  placeholder="Enter extra amount"
+                />
+              </div>
+
+              <div className="ep-fg">
                 <label className="ep-label">
                   Date of Joining<span className="ep-req">*</span>
                 </label>
@@ -700,6 +729,9 @@ const Employee_details = () => {
             <i className="bi bi-table"></i>
             <span>Employee Records</span>
             <span className="ep-records-count">{pagination.total} total</span>
+            <button className="ep-stmt-btn" onClick={openAllStatement}>
+              <i className="bi bi-file-earmark-text"></i> Statement
+            </button>
           </div>
 
           {/* Filter Bar */}
@@ -801,7 +833,8 @@ const Employee_details = () => {
                       <th>Rates</th>
                       <th>Petrol</th>
                       <th>Tea</th>
-                      {userRole === "admin" && <th>Actions</th>}
+                      <th>Extra</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -878,16 +911,27 @@ const Employee_details = () => {
                           <td style={{ fontFamily: "monospace", fontWeight: 700, color: "#0369a1" }}>
                             {money(emp.tea_allowance)}
                           </td>
-                          {userRole === "admin" && (
+                          <td style={{ fontFamily: "monospace", fontWeight: 700 }}>
+                            {money(emp.extra_rate)}
+                          </td>
+                          {(
                             <td>
                               <div className="ep-actions">
                                 <button
                                   className="ep-action-btn ep-action-btn--stmt"
                                   onClick={() => navigate(`/statements?type=employee&employee_id=${emp.id}`)}
-                                  title="Statement"
+                                  title="Salary statement"
                                 >
                                   <i className="bi bi-journal-text"></i>
                                 </button>
+                                <button
+                                  className="ep-action-btn ep-action-btn--edit"
+                                  onClick={() => setEmpStmt([emp])}
+                                  title="Print employee details"
+                                >
+                                  <i className="bi bi-file-earmark-text"></i>
+                                </button>
+                                {userRole === "admin" && (<>
                                 <button
                                   className="ep-action-btn ep-action-btn--edit"
                                   onClick={() => handleEdit(emp)}
@@ -902,6 +946,7 @@ const Employee_details = () => {
                                 >
                                   <i className="bi bi-trash-fill"></i>
                                 </button>
+                                </>)}
                               </div>
                             </td>
                           )}
@@ -910,7 +955,7 @@ const Employee_details = () => {
                     ) : (
                       <tr>
                         <td
-                          colSpan={userRole === "admin" ? 11 : 10}
+                          colSpan={12}
                           className="ep-empty"
                         >
                           <div className="ep-empty-inner">
@@ -1105,7 +1150,7 @@ const Employee_details = () => {
                       onChange={handleChange}
                       className="ep-input"
                     />
-                  ) : ["salary_amount", "price_per_bags", "petrol_allowance", "tea_allowance", ...ALL_RATE_KEYS].includes(key) ? (
+                  ) : ["salary_amount", "price_per_bags", "petrol_allowance", "tea_allowance", "extra_rate", ...ALL_RATE_KEYS].includes(key) ? (
                     <input
                       type="number"
                       name={key}
@@ -1144,7 +1189,77 @@ const Employee_details = () => {
         </div>
       )}
 
+      {empStmt && (
+        <div className="ep-stmt-overlay" onClick={() => setEmpStmt(null)}>
+          <div className="ep-stmt" onClick={(e) => e.stopPropagation()}>
+            <div className="ep-stmt__bar ep-no-print">
+              <b>Employee Statement</b>
+              <span style={{ flex: 1 }}></span>
+              <button className="ep-stmt-btn" onClick={() => window.print()}>
+                <i className="bi bi-printer"></i> Print / PDF
+              </button>
+              <button className="ep-stmt-btn ep-stmt-btn--ghost" onClick={() => setEmpStmt(null)}>Close</button>
+            </div>
+            <div id="emp-stmt-print">
+              <div className="ep-stmt__head">
+                <h2>BIP FENCING — Employee Details</h2>
+                <div>{new Date().toLocaleDateString("en-GB").replace(/\//g, "-")} · {empStmt.length} employee{empStmt.length === 1 ? "" : "s"}</div>
+              </div>
+              <table className="ep-stmt__table">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Name</th><th>Gender</th><th>WhatsApp</th><th>Branch</th><th>Salary Type</th>
+                    <th>Salary</th><th>Price / Pack</th><th>Rates</th><th>Petrol</th><th>Tea</th><th>Extra</th><th>Joined</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {empStmt.map((e, i) => (
+                    <tr key={e.id || i}>
+                      <td>{i + 1}</td>
+                      <td><b>{e.employee_name}</b></td>
+                      <td>{e.gender || "—"}</td>
+                      <td>{e.whatsapp_number || e.phone_number || "—"}</td>
+                      <td>{e.branch_name || "—"}</td>
+                      <td style={{ textTransform: "capitalize" }}>{e.salary_type || "—"}</td>
+                      <td>{Number(e.salary_amount) > 0 ? money(e.salary_amount) : "—"}</td>
+                      <td>{e.price_per_bags != null && e.price_per_bags !== "" ? `₹${Number(e.price_per_bags).toLocaleString("en-IN", { maximumFractionDigits: 15 })}` : "—"}</td>
+                      <td style={{ whiteSpace: "normal" }}>
+                        {ratesFor(e.branch_name).length
+                          ? ratesFor(e.branch_name).map(([k, label]) => `${label.replace(/ Rate| \(.*\)/g, "")}: ${money(e[k])}`).join(", ")
+                          : "—"}
+                      </td>
+                      <td>{money(e.petrol_allowance)}</td>
+                      <td>{money(e.tea_allowance)}</td>
+                      <td>{money(e.extra_rate)}</td>
+                      <td>{e.date_of_joining || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
+        .ep-stmt-btn { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; padding: 7px 14px; border-radius: 8px; border: none; background: #16a34a; color: #fff; font-weight: 700; cursor: pointer; font-size: 13px; }
+        .ep-stmt__bar .ep-stmt-btn { margin-left: 0; }
+        .ep-stmt-btn--ghost { background: #f1f5f9; color: #334155; }
+        .ep-stmt-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 1000; display: flex; justify-content: center; align-items: flex-start; padding: 30px 12px; overflow-y: auto; }
+        .ep-stmt { background: #fff; border-radius: 14px; width: 100%; max-width: 1150px; padding: 18px; }
+        .ep-stmt__bar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+        .ep-stmt__head { text-align: center; margin-bottom: 10px; }
+        .ep-stmt__head h2 { margin: 0 0 4px; font-size: 20px; }
+        .ep-stmt__table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+        .ep-stmt__table th, .ep-stmt__table td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; white-space: nowrap; }
+        .ep-stmt__table thead th { background: #f1f5f9; }
+        @media print {
+          body * { visibility: hidden !important; }
+          #emp-stmt-print, #emp-stmt-print * { visibility: visible !important; }
+          #emp-stmt-print { position: absolute; top: 0; left: 0; width: 100%; }
+          .ep-no-print { display: none !important; }
+          @page { size: A4 landscape; margin: 8mm; }
+        }
         /* NEW: hide the native scrollbar (and its up/down arrow buttons) everywhere,
            matching the same fix applied on the Admin Features page.
            Scrolling still works via mouse wheel, trackpad, touch, and keyboard —

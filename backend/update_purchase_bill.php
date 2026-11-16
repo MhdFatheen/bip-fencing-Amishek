@@ -39,16 +39,17 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $bill_date)) pbRespond(400, ['message' 
 $subtotal = 0.0;
 $clean = [];
 foreach ($items as $i => $it) {
-    $pid  = trim($it['product_id'] ?? '');
+    $pid  = trim($it['product_id'] ?? '');   // internal id of a saved item (kept)
+    $hsn  = array_key_exists('hsn', $it) ? trim((string)$it['hsn']) : $pid;   // old clients: typed code was the HSN
     $name = trim($it['product_name'] ?? '');
     $qty  = (float)($it['quantity'] ?? 0);
     $rate = (float)($it['rate'] ?? 0);
-    if ($pid === '' || $name === '' || $qty <= 0 || $rate < 0) {
-        pbRespond(400, ['message' => 'Item #' . ($i + 1) . ': product ID, name, quantity and rate are required']);
+    if ($name === '' || $qty <= 0 || $rate < 0) {
+        pbRespond(400, ['message' => 'Item #' . ($i + 1) . ': product name, quantity and rate are required']);
     }
     $amount = $qty * $rate;
     $subtotal += $amount;
-    $clean[] = ['product_id' => $pid, 'product_name' => $name, 'quantity' => $qty, 'rate' => $rate, 'amount' => $amount];
+    $clean[] = ['item_raw' => $it, 'hsn' => $hsn, 'product_id' => $pid, 'product_name' => $name, 'quantity' => $qty, 'rate' => $rate, 'amount' => $amount];
 }
 $gst_amount   = $gst_enabled ? $subtotal * $gst_rate / 100 : 0.0;
 
@@ -63,13 +64,18 @@ $total_amount = round($subtotal + $gst_amount + $round_off + $opening_balance, 2
 $conn = getDB();
 pbEnsureRoundOffColumns($conn);
 pbEnsureNullableBranch($conn);
+pbEnsureHsnColumns($conn);
 $bill = pbLoadBill($conn, $billId, $authUser);
 $branchId = $bill['branch_id'] === null ? null : (int)$bill['branch_id']; // null = All Branch
+// each product row can go to All Branch (NULL) or one chosen branch
+foreach ($clean as $k => $ci) {
+    $clean[$k]['item_branch'] = pbItemBranch($conn, $ci['item_raw'], $authUser, $branchId);
+}
 
 $conn->begin_transaction();
 try {
     // 1) Reverse the old items' stock, then remove them
-    $st = $conn->prepare("SELECT product_id, product_name, quantity, rate FROM purchase_bill_items WHERE purchase_bill_id = ?");
+    $st = $conn->prepare("SELECT product_id, product_name, quantity, rate, branch_id AS item_branch FROM purchase_bill_items WHERE purchase_bill_id = ?");
     $st->bind_param('i', $billId);
     $st->execute();
     $oldItems = $st->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -99,16 +105,24 @@ try {
     $st->execute();
     $st->close();
 
+    pbEnsureGstTypeColumn($conn);
+    $gst_type = (($data['gst_type'] ?? '') === 'igst') ? 'igst' : 'cgst_sgst';
+    $gtS = $conn->prepare("UPDATE purchase_bills SET gst_type = ? WHERE id = ?");
+    $gtS->bind_param('si', $gst_type, $billId);
+    $gtS->execute();
+    $gtS->close();
+
     // 4) Insert new items + add their stock
     $ins = $conn->prepare(
-        "INSERT INTO purchase_bill_items (purchase_bill_id, product_id, product_name, quantity, rate, amount, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO purchase_bill_items (purchase_bill_id, product_id, product_name, quantity, rate, amount, branch_id, hsn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))"
     );
     foreach ($clean as $it) {
         // same code but different product name = a different product (see purchase_common.php)
-        $it['product_id'] = pbResolveProductId($conn, $it['product_id'], $it['product_name']);
-        $ins->bind_param('issdddi', $billId, $it['product_id'], $it['product_name'],
-            $it['quantity'], $it['rate'], $it['amount'], $branchId);
+        $it['product_id'] = pbPickProductId($conn, $it['product_id'], $it['product_name'], $it['hsn']);
+        $it['product_name'] = pbCanonicalName($conn, $it['product_id'], $it['product_name']);   // existing product → its own spelling
+        $ins->bind_param('issdddis', $billId, $it['product_id'], $it['product_name'],
+            $it['quantity'], $it['rate'], $it['amount'], $it['item_branch'], $it['hsn']);
         $ins->execute();
         pbApplyStock($conn, [$it], $branchId, +1);   // one by one so later items see earlier ones
     }

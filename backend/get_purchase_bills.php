@@ -63,6 +63,8 @@ if ($product !== '') {
 
 $whereSql = count($where) > 0 ? 'WHERE ' . implode(' AND ', $where) : '';
 
+require_once __DIR__ . '/purchase_common.php';
+pbEnsureGstTypeColumn($conn);
 $sql = "SELECT pb.* FROM purchase_bills pb $whereSql ORDER BY pb.bill_date DESC, pb.id DESC";
 
 if (count($params) > 0) {
@@ -84,6 +86,8 @@ while ($row = $result->fetch_assoc()) {
 
 if (count($billIds) > 0) {
     $placeholders = implode(',', array_fill(0, count($billIds), '?'));
+    require_once __DIR__ . '/purchase_common.php';
+    pbEnsureHsnColumns($conn);
     $itemSql = "SELECT * FROM purchase_bill_items WHERE purchase_bill_id IN ($placeholders) ORDER BY id ASC";
     $itemStmt = $conn->prepare($itemSql);
     $itemTypes = str_repeat('i', count($billIds));

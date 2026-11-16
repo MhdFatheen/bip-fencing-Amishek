@@ -85,36 +85,56 @@ function pbLoadBill(mysqli $conn, int $billId, array $user): array {
 }
 
 // Add (+1) or reverse (-1) the stock of a bill's items
+// Branch of ONE item: "All Branch" = NULL, otherwise a branch id (1/2/3).
+// Admin picks it per item; branch users always use their own branch ($fallback).
+// No choice sent (old clients) -> $fallback, i.e. the previous behaviour.
+function pbItemBranch(mysqli $conn, array $it, array $user, ?int $fallback): ?int {
+    if (($user['role'] ?? '') !== 'admin') return $fallback;
+    if (!array_key_exists('branch_id', $it)) return $fallback;
+    $v = $it['branch_id'];
+    if ($v === null || $v === '' || $v === 'all') return null;
+    $id = (int)$v;
+    $res = $conn->query("SELECT id FROM branches WHERE id = " . $id);
+    if ($res && $res->num_rows > 0) return $id;
+    pbRespond(400, ['message' => 'Invalid branch selected for a product']);
+}
+
 function pbApplyStock(mysqli $conn, array $items, ?int $branchId, int $sign): void {
     // branch_id <=> ? also matches NULL (All Branch)
+    $billBranch = $branchId;
     $sel = $conn->prepare("SELECT id FROM purchase_stock WHERE product_id = ? AND branch_id <=> ?");
     $upd = $conn->prepare(
         "UPDATE purchase_stock
             SET total_purchased = total_purchased + ?,
                 current_stock   = current_stock + ?,
                 rate = IF(? > 0, ?, rate),
-                product_name = IF(? > 0, ?, product_name)
+                product_name = IF(? > 0 AND COALESCE(product_name,'') = '', ?, product_name),
+                hsn = IF(? = 1, ?, hsn)
           WHERE product_id = ? AND branch_id <=> ?"
     );
     $ins = $conn->prepare(
-        "INSERT INTO purchase_stock (product_id, product_name, total_purchased, current_stock, rate, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO purchase_stock (product_id, product_name, hsn, total_purchased, current_stock, rate, branch_id)
+         VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?)"
     );
     foreach ($items as $it) {
         $pid  = (string)$it['product_id'];
         $name = (string)$it['product_name'];
+        // per-item branch (item_branch) when given, else the bill's branch
+        $hsn  = trim((string)($it['hsn'] ?? ''));
+        $setHsn = ($sign > 0 && $hsn !== '') ? 1 : 0;   // HSN is only an attribute; never blanked
+        $ib   = array_key_exists('item_branch', $it) ? ($it['item_branch'] === null ? null : (int)$it['item_branch']) : $billBranch;
         $qty  = (float)$it['quantity'] * $sign;
         $rate = (float)$it['rate'];
 
-        $sel->bind_param('si', $pid, $branchId);
+        $sel->bind_param('si', $pid, $ib);
         $sel->execute();
         $exists = $sel->get_result()->fetch_assoc();
 
         if ($exists) {
-            $upd->bind_param('dddddssi', $qty, $qty, $sign, $rate, $sign, $name, $pid, $branchId);
+            $upd->bind_param('dddddsissi', $qty, $qty, $sign, $rate, $sign, $name, $setHsn, $hsn, $pid, $ib);
             $upd->execute();
         } elseif ($sign > 0) {
-            $ins->bind_param('ssdddi', $pid, $name, $qty, $qty, $rate, $branchId);
+            $ins->bind_param('sssdddi', $pid, $name, $hsn, $qty, $qty, $rate, $ib);
             $ins->execute();
         }
     }
@@ -157,6 +177,61 @@ function pbResolveProductId(mysqli $conn, string $pid, string $name): string {
         if (!$r || mb_strtolower(trim($r['product_name'])) === $key) return $cand;
     }
     return $pid;
+}
+
+// Product names are matched ignoring upper/lower case and extra spaces. When the
+// product already exists, its stored spelling is used (never the typed one), so
+// "CHAIN 4X4" and "chain 4x4" both stay as the existing "Chain 4x4".
+function pbCanonicalName(mysqli $conn, string $pid, string $name): string {
+    $name = trim($name);
+    $st = $conn->prepare("SELECT product_name FROM purchase_stock WHERE product_id = ? ORDER BY id ASC LIMIT 1");
+    $st->bind_param('s', $pid);
+    $st->execute();
+    $row = $st->get_result()->fetch_assoc();
+    $st->close();
+    if ($row && trim((string)$row['product_name']) !== '' &&
+        mb_strtolower(trim((string)$row['product_name'])) === mb_strtolower($name)) {
+        return trim((string)$row['product_name']);
+    }
+    return $name;
+}
+
+// HSN code is only an attribute of a purchased product (NOT an identifier).
+// Added once, on purchase_bill_items and purchase_stock. Existing rows stay NULL.
+function pbEnsureHsnColumns(mysqli $conn): void {
+    foreach (['purchase_bill_items', 'purchase_stock'] as $table) {
+        $res = $conn->query("SHOW COLUMNS FROM $table LIKE 'hsn'");
+        if ($res && $res->num_rows === 0) {
+            $conn->query("ALTER TABLE $table ADD COLUMN hsn VARCHAR(50) NULL DEFAULT NULL");
+        }
+    }
+}
+
+// Internal product id for one purchased row (HSN is NOT used to identify products):
+//   - an id already sent (editing a saved bill)           -> kept (pbResolveProductId)
+//   - the product NAME already exists in purchase stock   -> that product's id
+//   - otherwise a NEW product: HSN-based id when an HSN was typed (kept unique by
+//     pbResolveProductId, so same HSN + different name = separate product),
+//     or an auto id "PB-n" when no HSN was typed
+function pbPickProductId(mysqli $conn, string $pidIn, string $name, string $hsn): string {
+    if ($pidIn !== '') return pbResolveProductId($conn, $pidIn, $name);
+    $key = mb_strtolower(trim($name));
+    $st = $conn->prepare("SELECT product_id FROM purchase_stock WHERE LOWER(TRIM(product_name)) = ? ORDER BY id ASC LIMIT 1");
+    $st->bind_param('s', $key);
+    $st->execute();
+    $row = $st->get_result()->fetch_assoc();
+    $st->close();
+    if ($row) return (string)$row['product_id'];
+    if ($hsn !== '') return pbResolveProductId($conn, $hsn, $name);
+    $chk = $conn->prepare("SELECT 1 AS x FROM purchase_stock WHERE product_id = ? LIMIT 1");
+    for ($n = 1; $n < 100000; $n++) {
+        $cand = 'PB-' . $n;
+        $chk->bind_param('s', $cand);
+        $chk->execute();
+        if (!$chk->get_result()->fetch_assoc()) { $chk->close(); return $cand; }
+    }
+    $chk->close();
+    return 'PB-' . time();
 }
 
 function pbEnsurePaymentsTable(mysqli $conn): void {
@@ -226,4 +301,13 @@ function pbRoundOff(string $mode, $manualValue, float $billAmount): array {
         return ['manual', $r];
     }
     return ['none', 0.0];
+}
+
+// purchase_bills.gst_type: 'cgst_sgst' (default, as before) or 'igst' – column added once
+function pbEnsureGstTypeColumn(mysqli $conn): void
+{
+    $r = $conn->query("SHOW COLUMNS FROM purchase_bills LIKE 'gst_type'");
+    if ($r && $r->num_rows === 0) {
+        $conn->query("ALTER TABLE purchase_bills ADD COLUMN gst_type VARCHAR(10) NOT NULL DEFAULT 'cgst_sgst'");
+    }
 }

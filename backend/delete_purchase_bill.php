@@ -21,7 +21,7 @@ pbEnsurePaymentsTable($conn);
 
 $conn->begin_transaction();
 try {
-    $st = $conn->prepare("SELECT product_id, product_name, quantity, rate FROM purchase_bill_items WHERE purchase_bill_id = ?");
+    $st = $conn->prepare("SELECT product_id, product_name, quantity, rate, branch_id AS item_branch FROM purchase_bill_items WHERE purchase_bill_id = ?");
     $st->bind_param('i', $billId);
     $st->execute();
     $items = $st->get_result()->fetch_all(MYSQLI_ASSOC);

@@ -14,6 +14,23 @@ $in     = json_decode(file_get_contents('php://input'), true) ?: [];
 
 // Branch scope: null = admin viewing all branches
 $scope = ($authUser['role'] === 'admin') ? $authUser['view_branch_id'] : (int)$authUser['branch_id'];
+$isAdmin = ($authUser['role'] === 'admin');
+// Auto-add the Extra notes column (no manual SQL needed)
+try {
+    if (!$pdo->query("SHOW COLUMNS FROM salary_days LIKE 'extra_note'")->fetch()) {
+        $pdo->exec("ALTER TABLE salary_days ADD COLUMN extra_note VARCHAR(255) NULL DEFAULT NULL");
+    }
+    if (!$pdo->query("SHOW COLUMNS FROM salary_days LIKE 'kambi_product'")->fetch()) {
+        $pdo->exec("ALTER TABLE salary_days ADD COLUMN kambi_product VARCHAR(255) NULL DEFAULT NULL");
+    }
+} catch (Throwable $e) { /* ignore */ }
+// Branch staff can ADD entries but cannot edit / delete saved ones
+$adminOnly = ['delete_day', 'delete_ot', 'delete_payment', 'update_sale', 'adjust_bags', 'update_bags_count', 'adjust_ot_quantity', 'update_ot_quantity'];
+if (!$isAdmin && in_array($_GET['action'] ?? '', $adminOnly, true)) {
+    http_response_code(403);
+    echo json_encode(['error' => 'Only admin can edit or delete']);
+    exit;
+}
 
 function out($d, $code = 200) { http_response_code($code); echo json_encode($d); exit; }
 function fail($m, $code = 400) { out(['error' => $m], $code); }
@@ -32,6 +49,28 @@ function findEmployee(PDO $pdo, $empId, $scope) {
     $e = $st->fetch(PDO::FETCH_ASSOC);
     if (!$e) fail('Employee not found', 404);
     return $e;
+}
+
+// Kambi Kattu product → Stock In / reverse (same product name in the employee's branch)
+function kambiStock(PDO $pdo, $branchId, $product, float $qty, string $note): void {
+    $product = trim((string)$product);
+    if ($product === '' || $qty == 0) return;
+    $st = $pdo->prepare("SELECT id, product_name FROM products WHERE product_name = ? AND branch_id = ? LIMIT 1");
+    $st->execute([$product, $branchId]);
+    $p = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$p) return;
+    $pdo->prepare("UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?")->execute([$qty, $p['id']]);
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS product_stock_log (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT, product_id INT UNSIGNED NOT NULL,
+            product_name VARCHAR(255) NOT NULL DEFAULT '', branch_id INT UNSIGNED DEFAULT NULL,
+            log_type VARCHAR(30) NOT NULL DEFAULT 'stock_in', qty DECIMAL(12,3) NOT NULL DEFAULT 0,
+            note TEXT DEFAULT NULL, logged_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id), KEY (product_id), KEY (branch_id), KEY (logged_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $pdo->prepare("INSERT INTO product_stock_log (product_id, product_name, branch_id, log_type, qty, note) VALUES (?,?,?,?,?,?)")
+            ->execute([$p['id'], $p['product_name'], $branchId, $qty > 0 ? 'stock_in' : 'stock_out', abs($qty), $note]);
+    } catch (Throwable $e) { /* log is optional */ }
 }
 
 // Load a salary_days row, enforcing branch scope
@@ -126,7 +165,7 @@ try {
         $st = $pdo->prepare("
             SELECT sd.id, e.emp_id AS employee_id, e.employee_name, sd.date, sd.attendance_status,
                    sd.bags_count, sd.base_amount, sd.ot_amount, sd.total_amount, sd.branch_id,
-                   sd.pack_count, sd.loading, sd.unloading, sd.location_change, sd.advance, sd.pack_rate, sd.loading_rate, sd.unloading_rate, sd.loading_amount, sd.unloading_amount, sd.loading_qty, sd.unloading_qty, sd.location_qty, sd.petrol, sd.tea, sd.kambi_qty, sd.kambi_amount, sd.others_qty, sd.others_amount, sd.work_yes, sd.work_amount, sd.extra_amount, sd.salary_amount, sd.food_amount, sd.ot_day_amount
+                   sd.pack_count, sd.loading, sd.unloading, sd.location_change, sd.advance, sd.pack_rate, sd.loading_rate, sd.unloading_rate, sd.loading_amount, sd.unloading_amount, sd.loading_qty, sd.unloading_qty, sd.location_qty, sd.petrol, sd.tea, sd.kambi_qty, sd.kambi_amount, sd.others_qty, sd.others_amount, sd.work_yes, sd.work_amount, sd.extra_amount, sd.salary_amount, sd.food_amount, sd.ot_day_amount, sd.extra_note, sd.kambi_product
             FROM salary_days sd JOIN employees e ON e.id = sd.employee_id
             WHERE 1=1 $w ORDER BY sd.date DESC");
         $st->execute($p);
@@ -216,6 +255,14 @@ try {
     case 'save_entry':
         $status = $in['status'] ?? 'Present';
         if (!in_array($status, ['Present', 'Absent', 'Half Day'], true)) fail('Status must be Present, Half Day or Absent');
+        if (!$isAdmin) {
+            // staff: an entry already filled for this employee/date = edit → not allowed
+            $chk = $pdo->prepare("SELECT sd.id FROM salary_days sd JOIN employees e ON e.id = sd.employee_id
+                                   WHERE e.emp_id = ? AND sd.date = ?
+                                     AND (sd.pack_count > 0 OR sd.salary_amount > 0 OR sd.advance > 0 OR sd.petrol > 0 OR sd.tea > 0)");
+            $chk->execute([$in['employee_id'], $in['date']]);
+            if ($chk->fetchColumn()) fail('Entry already saved for this date. Only admin can edit it.', 403);
+        }
         if (empty($in['employee_id']) || empty($in['date'])) fail('Employee and date are required');
         $emp = findEmployee($pdo, $in['employee_id'], $scope);
         if (($authUser['role'] ?? '') !== 'admin' && dayIsFilled($pdo, (int)$emp['id'], (string)$in['date'])) {
@@ -230,7 +277,9 @@ try {
         $locQty    = max(0, (float)($in['location_qty'] ?? 0));
         $locAmt    = round($locQty * (float)($emp['location_change_rate'] ?? 0), 2);
         $kambiQty  = max(0, (float)($in['kambi_qty'] ?? 0));
-        $kambiAmt  = round($kambiQty * (float)($emp['kambi_kattu_rate'] ?? 0), 2);
+        // Kambi Kattu: fixed day amount (employee rate, e.g. 200) whatever the qty.
+        // per piece = rate ÷ qty, so qty × (rate ÷ qty) = rate
+        $kambiAmt  = $kambiQty > 0 ? round((float)($emp['kambi_kattu_rate'] ?? 0), 2) : 0;
         $othersQty = max(0, (float)($in['others_qty'] ?? 0));
         $othersAmt = round($othersQty * (float)($emp['others_rate'] ?? 0), 2);
         $vals = [
@@ -256,10 +305,18 @@ try {
             max(0, (float)($in['salary_amount'] ?? 0)),
             max(0, (float)($in['food_amount'] ?? 0)),
             max(0, (float)($in['ot_day_amount'] ?? 0)),
+            trim((string)($in['extra_note'] ?? '')) ?: null,
         ];
-        $pdo->prepare("INSERT INTO salary_days (employee_id, date, attendance_status, branch_id, pack_count, loading, unloading, location_change, advance, pack_rate, loading_rate, unloading_rate, loading_amount, unloading_amount, loading_qty, unloading_qty, location_qty, petrol, tea, kambi_qty, kambi_amount, others_qty, others_amount, work_yes, work_amount, extra_amount, salary_amount, food_amount, ot_day_amount)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                       ON DUPLICATE KEY UPDATE attendance_status = VALUES(attendance_status), pack_count = VALUES(pack_count),
+        // Admin (All Branches) can say which branch he worked at on this date
+        $wb = (int)($in['work_branch_id'] ?? 0);
+        if ($isAdmin && in_array($wb, [1, 2, 3], true)) $emp['branch_id'] = $wb;
+        // old Kambi product on this date (edit) → reverse its stock first
+        $old = $pdo->prepare("SELECT kambi_product, kambi_qty, branch_id FROM salary_days WHERE employee_id = ? AND date = ?");
+        $old->execute([$emp['id'], $in['date']]);
+        $old = $old->fetch(PDO::FETCH_ASSOC) ?: null;
+        $pdo->prepare("INSERT INTO salary_days (employee_id, date, attendance_status, branch_id, pack_count, loading, unloading, location_change, advance, pack_rate, loading_rate, unloading_rate, loading_amount, unloading_amount, loading_qty, unloading_qty, location_qty, petrol, tea, kambi_qty, kambi_amount, others_qty, others_amount, work_yes, work_amount, extra_amount, salary_amount, food_amount, ot_day_amount, extra_note)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON DUPLICATE KEY UPDATE attendance_status = VALUES(attendance_status), branch_id = VALUES(branch_id), pack_count = VALUES(pack_count),
                          loading = VALUES(loading), unloading = VALUES(unloading),
                          location_change = VALUES(location_change), advance = VALUES(advance),
                          pack_rate = VALUES(pack_rate), loading_rate = VALUES(loading_rate), unloading_rate = VALUES(unloading_rate),
@@ -268,8 +325,13 @@ try {
                          petrol = VALUES(petrol), tea = VALUES(tea),
                          kambi_qty = VALUES(kambi_qty), kambi_amount = VALUES(kambi_amount),
                          others_qty = VALUES(others_qty), others_amount = VALUES(others_amount),
-                         work_yes = VALUES(work_yes), work_amount = VALUES(work_amount), extra_amount = VALUES(extra_amount), salary_amount = VALUES(salary_amount), food_amount = VALUES(food_amount), ot_day_amount = VALUES(ot_day_amount)")
+                         work_yes = VALUES(work_yes), work_amount = VALUES(work_amount), extra_amount = VALUES(extra_amount), salary_amount = VALUES(salary_amount), food_amount = VALUES(food_amount), ot_day_amount = VALUES(ot_day_amount), extra_note = VALUES(extra_note)")
             ->execute(array_merge([$emp['id'], $in['date'], $status, $emp['branch_id']], $vals));
+        $pdo->prepare("UPDATE salary_days SET kambi_product = ? WHERE employee_id = ? AND date = ?")
+            ->execute([$kambiQty > 0 ? (trim((string)($in['kambi_product'] ?? '')) ?: null) : null, $emp['id'], $in['date']]);
+        $who = $emp['employee_name'] . ' ' . $in['date'];
+        if ($old && $old['kambi_product']) kambiStock($pdo, $old['branch_id'], $old['kambi_product'], -(float)$old['kambi_qty'], "Kambi Kattu edit – $who");
+        if ($kambiQty > 0) kambiStock($pdo, $emp['branch_id'], $in['kambi_product'] ?? '', $kambiQty, "Kambi Kattu – $who");
         $pdo->prepare("UPDATE attendance SET status = ? WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci IN (?, ?) AND date = ?")
             ->execute([$status, $emp['emp_id'], (string)$emp['id'], $in['date']]);
         $st = $pdo->prepare("SELECT id FROM salary_days WHERE employee_id = ? AND date = ?");
@@ -318,6 +380,7 @@ try {
     case 'delete_day':
         $d = findDay($pdo, $_GET['id'] ?? 0, $scope);
         $pdo->prepare("DELETE FROM salary_days WHERE id = ?")->execute([$d['id']]);
+        if (!empty($d['kambi_product'])) kambiStock($pdo, $d['branch_id'], $d['kambi_product'], -(float)$d['kambi_qty'], 'Kambi Kattu entry deleted');
         out(['success' => true]);
 
     // ── Bags +/- and set ───────────────────────────────────────

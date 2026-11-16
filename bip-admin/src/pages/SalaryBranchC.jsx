@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { apiFetch } from "../utils/api";
+import { useLocation, useNavigate } from "react-router-dom";
 
 /* =========================================================
    Salary — single entry page (Branch A, B and C)
@@ -23,21 +24,24 @@ const VARIANTS = {
   A: {
     title: "Salary — Kadambankulam",
     packs: true,
+    extra: true,
     petrolTea: true,
     items: [
-      { key: "kambi", label: "Kambi Kattu", rate: "kambi_kattu_rate", amount: "kambi_amount" },
+      { key: "kambi", label: "Kambi Kattu", rate: "kambi_kattu_rate", amount: "kambi_amount", fixed: true },
       { key: "others", label: "Others", rate: "others_rate", amount: "others_amount" },
     ],
   },
   C: {
     title: "Salary — Panagudi",
     packs: true,
+    extra: true,
     salaryPerPack: false, // Total = Salary + (packs × Price per Pack) — same as other branches
     petrolTea: true,
     items: [
       { key: "loading", label: "Loading", rate: "loading_rate", amount: "loading_amount" },
       { key: "unloading", label: "Unloading", rate: "unloading_rate", amount: "unloading_amount" },
       { key: "location", label: "Location Change", rate: "location_change_rate", amount: "location_change" },
+      { key: "kambi", label: "Kambi Kattu", rate: "kambi_kattu_rate", amount: "kambi_amount", fixed: true },
     ],
   },
 };
@@ -49,15 +53,24 @@ const toYMD = (d) => {
 const inr = (v) =>
   `₹${(Number(v) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function SalaryBranchC({ variant = "C" }) {
-  const cfg = VARIANTS[variant] || VARIANTS.C;
+const VAR_OF = { 1: "A", 2: "B", 3: "C" };
+const BR_NAME = { 1: "Kadambankulam", 2: "Fencing Group", 3: "Panagudi" };
+
+export default function SalaryBranchC({ variant = "C", all = false }) {
+  // all = "All Branches" selected: list every employee, form follows that employee's branch
+  const [allVar, setAllVar] = useState("A");
+  const [workBranch, setWorkBranch] = useState(""); // branch he worked at on this date (All Branches only)
+  const [pickTick, setPickTick] = useState(0);
+  const cfg = VARIANTS[all ? allVar : variant] || VARIANTS.C;
+  const cfgOf = (bid) => (all && VARIANTS[VAR_OF[bid]]) || cfg;
   const ITEMS = cfg.items;
+  const cfgBase = cfg;
 
   const emptyForm = () => {
     const f = {
       employee_id: "",
       date: toYMD(new Date()),
-      status: "Present",
+      status: "Absent", // default Absent — tap Present / Half Day when they work
       salary: "",
       pack_count: "",
       petrol: "",
@@ -67,6 +80,8 @@ export default function SalaryBranchC({ variant = "C" }) {
       work_yes: "No",
       work_amount: "",
       extra: "",
+      extra_note: "",
+      kambi_product: "",
       advance: "",
     };
     ITEMS.forEach((it) => (f[`${it.key}_qty`] = ""));
@@ -86,20 +101,23 @@ export default function SalaryBranchC({ variant = "C" }) {
     if (pps !== null) f = { ...f, salary: 0 };
     const items = {};
     ITEMS.forEach((it) => {
-      items[it.key] = (Number(f[`${it.key}_qty`]) || 0) * (Number(emp?.[it.rate]) || 0);
+      const q = Number(f[`${it.key}_qty`]) || 0;
+      // Kambi Kattu: rate ÷ qty × qty → always the employee's fixed amount (e.g. 200)
+      items[it.key] = it.fixed ? (q > 0 ? Number(emp?.[it.rate]) || 0 : 0) : q * (Number(emp?.[it.rate]) || 0);
     });
     // Work amount always comes from the employee page (Yes = add it, No = 0)
     const work = f.work_yes === "Yes" ? Number(emp?.work_rate) || 0 : 0;
     return finish(f, packAmt, items, work, Number(f.extra) || 0);
   };
   const calcRow = (r) => {
+    const rc = cfgOf(r.branch_id);
     const packAmt = (Number(r.pack_count) || 0) * (Number(r.pack_rate) || 0);
     const items = {};
-    ITEMS.forEach((it) => (items[it.key] = Number(r[it.amount]) || 0));
+    rc.items.forEach((it) => (items[it.key] = Number(r[it.amount]) || 0));
     const work = Number(r.work_yes) ? Number(r.work_amount) || 0 : 0;
-    return finish(r, packAmt, items, work, Number(r.extra_amount) || 0);
+    return finish(r, packAmt, items, work, Number(r.extra_amount) || 0, rc);
   };
-  const finish = (f, packAmt, items, work = 0, extra = 0) => {
+  const finish = (f, packAmt, items, work = 0, extra = 0, cfg = cfgBase) => {
     const petrol = cfg.petrolTea ? Number(f.petrol) || 0 : 0;
     const tea = cfg.petrolTea ? Number(f.tea) || 0 : 0;
     const advance = Number(f.advance) || 0;
@@ -127,6 +145,9 @@ export default function SalaryBranchC({ variant = "C" }) {
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
 
   const isAdmin = localStorage.getItem("role") === "admin";
+  // Weekly view: list of employees → tap one to enter salary
+  const [selEmp, setSelEmp] = useState(null);
+  const [listQ, setListQ] = useState("");
 
   const showToast = (message, type = "success") => {
     setToast({ show: true, message, type });
@@ -140,6 +161,68 @@ export default function SalaryBranchC({ variant = "C" }) {
       setEmployees(Array.isArray(data) ? data : data.employees || []);
     } catch {
       setEmployees([]);
+    }
+  };
+
+  // ── Employee statement ──────────────────────────────────────
+  const monthStart = () => { const d = new Date(); return toYMD(new Date(d.getFullYear(), d.getMonth(), 1)); };
+  const [stmt, setStmt] = useState(null); // { employee_id, name }
+  const [stmtFrom, setStmtFrom] = useState(monthStart());
+  const [stmtTo, setStmtTo] = useState(toYMD(new Date()));
+  const [stmtPays, setStmtPays] = useState([]);
+  const [stmtPay, setStmtPay] = useState({ amount: "", date: toYMD(new Date()), note: "Cash" });
+
+  const loadStmtPays = async () => {
+    try {
+      const res = await apiFetch("/salary/salary_daily.php?action=payments");
+      const data = await res.json();
+      setStmtPays(Array.isArray(data) ? data : []);
+    } catch {
+      setStmtPays([]);
+    }
+  };
+  // Opened from Employee page → open that employee's statement once
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const st = location.state;
+    if (st?.stmtEmp) {
+      setStmt({ employee_id: st.stmtEmp, name: st.stmtName || "" });
+      loadStmtPays();
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openStatement = (r) => {
+    setStmt({ employee_id: r.employee_id, name: r.employee_name });
+    loadStmtPays();
+  };
+  const savePayment = async () => {
+    if (!(Number(stmtPay.amount) > 0)) return showToast("Enter the amount paid", "error");
+    try {
+      const res = await apiFetch("/salary/salary_daily.php?action=add_payment", {
+        method: "POST",
+        body: JSON.stringify({ employee_id: stmt.employee_id, amount: Number(stmtPay.amount), payment_date: stmtPay.date, note: stmtPay.note }),
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      showToast("Salary payment saved");
+      setStmtPay((p) => ({ ...p, amount: "" }));
+      loadStmtPays();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+  const deletePayment = async (id) => {
+    if (!window.confirm("Delete this payment?")) return;
+    try {
+      const res = await apiFetch(`/salary/salary_daily.php?action=delete_payment&id=${id}`, { method: "DELETE" });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      loadStmtPays();
+    } catch (err) {
+      showToast(err.message, "error");
     }
   };
 
@@ -158,9 +241,30 @@ export default function SalaryBranchC({ variant = "C" }) {
     }
   };
 
+  const [products, setProducts] = useState([]);
+  const loadProducts = async () => {
+    try {
+      const res = await apiFetch("/products.php");
+      const data = await res.json();
+      setProducts(Array.isArray(data) ? data : []);
+    } catch {
+      setProducts([]);
+    }
+  };
+  // one entry per product name (admin "All Branches" returns a copy per branch)
+  const kambiProducts = useMemo(() => {
+    const seen = {};
+    products.forEach((p) => {
+      if (Number(p.kambi_qty) > 0 && !seen[p.product_name]) seen[p.product_name] = Number(p.kambi_qty);
+    });
+    return Object.entries(seen).map(([name, qty]) => ({ name, qty }));
+  }, [products]);
+
   useEffect(() => {
+    loadProducts();
     loadEmployees();
     loadRecords();
+    loadStmtPays();
   }, []);
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
@@ -180,6 +284,7 @@ export default function SalaryBranchC({ variant = "C" }) {
       ...p,
       employee_id: emp.emp_id,
       salary: salaryFor(emp, p.status),
+      extra: amt(emp.extra_rate),
       work_amount: cfg.yesNo && p.work_yes === "Yes" ? amt(emp.work_rate) : "",
       petrol: cfg.petrolTea ? amt(emp.petrol_allowance) : "",
       tea: cfg.petrolTea ? amt(emp.tea_allowance) : "",
@@ -217,6 +322,9 @@ export default function SalaryBranchC({ variant = "C" }) {
         work_yes: form.work_yes === "Yes" ? 1 : 0,
         work_amount: form.work_yes === "Yes" ? Number(selectedEmp?.work_rate) || 0 : 0,
         extra_amount: Number(form.extra) || 0,
+        extra_note: Number(form.extra) > 0 ? form.extra_note || "" : "",
+        kambi_product: form.kambi_product || "",
+        ...(all && workBranch ? { work_branch_id: Number(workBranch) } : {}),
       };
       ITEMS.forEach((it) => (body[`${it.key}_qty`] = Number(form[`${it.key}_qty`]) || 0));
       const res = await apiFetch("/salary/salary_daily.php?action=save_entry", {
@@ -228,6 +336,7 @@ export default function SalaryBranchC({ variant = "C" }) {
       showToast(editing ? "Entry updated" : "Entry saved");
       if (SMS_ENABLED) sendSalarySms();
       resetForm();
+      if (selEmp) pickEmployee(selEmp);
       loadRecords();
     } catch (err) {
       showToast(err.message, "error");
@@ -243,7 +352,7 @@ export default function SalaryBranchC({ variant = "C" }) {
     if (cfg.packs) lines.push(`No of Packs: ${inr(totals.packAmt)}`);
     ITEMS.forEach((it) => lines.push(`${it.label}: ${inr(totals.items[it.key])}`));
     if (cfg.yesNo) lines.push(`Work: ${inr(totals.work)}`);
-    if (cfg.extra || cfg.yesNo) lines.push(`Extra: ${inr(totals.extra)}`);
+    if (cfg.extra || cfg.yesNo) lines.push(`Extra: ${inr(totals.extra)}${form.extra_note ? ` (${form.extra_note})` : ""}`);
     if (cfg.foodOt) lines.push(`Food: ${inr(totals.food)}`, `OT: ${inr(totals.ot)}`);
     if (cfg.petrolTea) lines.push(`Petrol: ${inr(totals.petrol)}`, `Tea: ${inr(totals.tea)}`);
     lines.push(`Advance: -${inr(totals.advance)}`, `Total: ${inr(totals.total)}`, "", "Thank you - BIP Fencing");
@@ -288,8 +397,16 @@ export default function SalaryBranchC({ variant = "C" }) {
       work_yes: Number(r.work_yes) ? "Yes" : "No",
       work_amount: Number(r.work_amount) || "",
       extra: Number(r.extra_amount) || "",
+      extra_note: r.extra_note || "",
+      kambi_product: r.kambi_product || "",
     };
-    ITEMS.forEach((it) => (f[`${it.key}_qty`] = Number(r[`${it.key}_qty`]) || ""));
+    (all ? Object.values(VARIANTS).flatMap((v) => v.items) : ITEMS).forEach(
+      (it) => (f[`${it.key}_qty`] = Number(r[`${it.key}_qty`]) || "")
+    );
+    if (all && r.branch_id) {
+      setWorkBranch(String(r.branch_id));
+      setAllVar(VAR_OF[r.branch_id] || "A");
+    }
     setForm(f);
     setEmpSearch(r.employee_name || "");
     setEditing(true);
@@ -313,10 +430,24 @@ export default function SalaryBranchC({ variant = "C" }) {
     }
   };
 
+  // ── Week (Monday – Sunday) ────────────────────────────────
+  const weekStart = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return toYMD(d);
+  })();
+  const weekEnd = (() => {
+    const d = new Date(weekStart + "T00:00:00");
+    d.setDate(d.getDate() + 6);
+    return toYMD(d);
+  })();
+  const fmtD = (ymd) => (ymd ? ymd.split("-").reverse().join("-") : "");
+
   const filtered = useMemo(
     () =>
       records
         .filter((r) => {
+          if (selEmp && (r.employee_id !== selEmp.emp_id || r.date < weekStart || r.date > weekEnd)) return false;
           const q = filter.q.trim().toLowerCase();
           if (q && !(r.employee_name || "").toLowerCase().includes(q)) return false;
           if (filter.from && r.date < filter.from) return false;
@@ -324,8 +455,87 @@ export default function SalaryBranchC({ variant = "C" }) {
           return true;
         })
         .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id),
-    [records, filter],
+    [records, filter, selEmp, weekStart, weekEnd],
   );
+
+  // earned / advance / paid → previous pending and balance
+  const weekSummary = (empId) => {
+    const rows = records.filter((x) => x.employee_id === empId);
+    const pays = stmtPays.filter((p) => p.employee_id === empId);
+    let prevNet = 0, gross = 0, adv = 0, prevPaid = 0, paid = 0;
+    rows.forEach((x) => {
+      const c = calcRow(x);
+      if (x.date < weekStart) prevNet += c.total;
+      else if (x.date <= weekEnd) {
+        gross += c.total + c.advance;
+        adv += c.advance;
+      }
+    });
+    pays.forEach((p) => {
+      if (p.payment_date < weekStart) prevPaid += Number(p.amount) || 0;
+      else if (p.payment_date <= weekEnd) paid += Number(p.amount) || 0;
+    });
+    const pending = prevNet - prevPaid;
+    return { gross, adv, paid, pending, balance: pending + gross - adv - paid };
+  };
+
+  // Branch view: also list people from another branch who worked here (records saved under this branch)
+  const listEmployees = useMemo(() => {
+    if (all) return employees;
+    const have = new Set(employees.map((e) => e.emp_id));
+    const extra = {};
+    records.forEach((x) => {
+      if (!have.has(x.employee_id) && !extra[x.employee_id])
+        extra[x.employee_id] = { emp_id: x.employee_id, employee_name: x.employee_name, visitor: true };
+    });
+    return [...employees, ...Object.values(extra)];
+  }, [all, employees, records]);
+
+  const openEmp = (emp) => {
+    if (all) {
+      setAllVar(VAR_OF[emp.branch_id] || "A");
+      setWorkBranch(String(emp.branch_id || ""));
+    }
+    else {
+      resetForm();
+      pickEmployee(emp);
+    }
+    setSelEmp(emp);
+    setStmtPay({ amount: "", date: toYMD(new Date()), note: "Cash" });
+    window.scrollTo(0, 0);
+  };
+  // All Branches: fill the form after the branch layout has switched
+  useEffect(() => {
+    if (all && selEmp) {
+      const keep = form.date;
+      resetForm();
+      setForm((f) => ({ ...f, date: keep }));
+      pickEmployee(selEmp);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [all, selEmp?.emp_id, pickTick]);
+  const changeWorkBranch = (b) => {
+    setWorkBranch(b);
+    setAllVar(VAR_OF[b] || "A");
+    setPickTick((t) => t + 1);
+  };
+
+  const paySelected = async () => {
+    if (!(Number(stmtPay.amount) > 0)) return showToast("Enter the amount paid", "error");
+    try {
+      const res = await apiFetch("/salary/salary_daily.php?action=add_payment", {
+        method: "POST",
+        body: JSON.stringify({ employee_id: selEmp.emp_id, amount: Number(stmtPay.amount), payment_date: stmtPay.date, note: stmtPay.note }),
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      showToast("Salary payment saved");
+      setStmtPay((p) => ({ ...p, amount: "" }));
+      loadStmtPays();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
 
   const numInput = (key, placeholder = "0") => (
     <input
@@ -350,13 +560,106 @@ export default function SalaryBranchC({ variant = "C" }) {
           <i className="bi bi-cash-stack"></i>
         </div>
         <div>
-          <h1>{cfg.title}</h1>
+          <h1>{all && !selEmp ? "Salary — All Branches" : cfg.title}</h1>
           <p>Daily attendance, packs and advance per employee</p>
         </div>
       </div>
 
+      {!selEmp && (
+        <div className="sp-card">
+          <div className="sp-card__head">
+            <i className="bi bi-people"></i>
+            <span>Employees — this week {fmtD(weekStart)} to {fmtD(weekEnd)}</span>
+          </div>
+          <input
+            className="sp-input"
+            style={{ marginBottom: 12, maxWidth: 320 }}
+            placeholder="Search employee…"
+            value={listQ}
+            onChange={(e) => setListQ(e.target.value)}
+          />
+          <div className="sp-table-wrap">
+            <table className="sp-table">
+              <thead>
+                <tr>
+                  <th>Employee</th><th>This week earned</th><th>Previous pending</th><th>Advance</th><th>Paid</th><th>Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {listEmployees
+                  .filter((e) => (e.employee_name || "").toLowerCase().includes(listQ.trim().toLowerCase()))
+                  .map((e) => {
+                    const w = weekSummary(e.emp_id);
+                    return (
+                      <tr key={e.emp_id} style={{ cursor: "pointer" }} onClick={() => openEmp(e)} title="Open">
+                        <td className="sp-strong">
+                          {e.employee_name}
+                          {e.visitor && <div style={{ fontSize: 12, color: "#b45309", fontWeight: 400 }}>other branch – worked here</div>}
+                          {all && <div style={{ fontSize: 12, color: "#64748b", fontWeight: 400 }}>{BR_NAME[e.branch_id] || e.branch || ""}</div>}
+                        </td>
+                        <td>{inr(w.gross)}</td>
+                        <td style={{ color: w.pending > 0 ? "#dc2626" : undefined, fontWeight: w.pending > 0 ? 700 : 400 }}>
+                          {w.pending ? inr(w.pending) : "—"}
+                        </td>
+                        <td className="sp-neg">{w.adv ? `−${inr(w.adv)}` : "—"}</td>
+                        <td>{w.paid ? inr(w.paid) : "—"}</td>
+                        <td className="sp-strong" style={{ color: w.balance > 0 ? "#dc2626" : "#15803d" }}>{inr(w.balance)}</td>
+                      </tr>
+                    );
+                  })}
+                {employees.length === 0 && (
+                  <tr><td colSpan={6} className="sp-empty">No employees in this branch</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {selEmp && (() => {
+        const w = weekSummary(selEmp.emp_id);
+        return (
+          <div className="sp-card">
+            <div className="sp-card__head">
+              <button type="button" className="sp-btn sp-btn--ghost" onClick={() => { setSelEmp(null); resetForm(); }}>
+                ← All employees
+              </button>
+              <span style={{ marginLeft: 8 }}>{selEmp.employee_name} — week {fmtD(weekStart)} to {fmtD(weekEnd)}</span>
+              <button type="button" className="sp-btn" style={{ marginLeft: "auto" }}
+                onClick={() => openStatement({ employee_id: selEmp.emp_id, employee_name: selEmp.employee_name })}>
+                📄 Statement
+              </button>
+            </div>
+            <div className="sp-stmt__sum" style={{ margin: 0, maxWidth: 420 }}>
+              <div><span>This week earned</span><b>{inr(w.gross)}</b></div>
+              <div><span>Previous pending</span><b style={{ color: w.pending > 0 ? "#dc2626" : undefined }}>{w.pending >= 0 ? "+" : ""}{inr(w.pending)}</b></div>
+              <div><span>Advance</span><b className="sp-neg">−{inr(w.adv)}</b></div>
+              <div><span>Paid this week</span><b className="sp-neg">−{inr(w.paid)}</b></div>
+              <div className="sp-stmt__bal"><span>Balance to pay</span><b style={{ color: w.balance > 0 ? "#dc2626" : "#15803d" }}>{inr(w.balance)}</b></div>
+            </div>
+            <div className="sp-stmt__pay">
+              <b>💰 Pay Salary</b>
+              <input type="number" className="sp-input" placeholder="Amount" value={stmtPay.amount}
+                onChange={(e) => setStmtPay((p) => ({ ...p, amount: e.target.value }))} />
+              <input type="date" className="sp-input" value={stmtPay.date}
+                onChange={(e) => setStmtPay((p) => ({ ...p, date: e.target.value }))} />
+              <select className="sp-input" value={stmtPay.note} onChange={(e) => setStmtPay((p) => ({ ...p, note: e.target.value }))}>
+                <option>Cash</option><option>GPay</option><option>Cheque</option>
+              </select>
+              <button type="button" className="sp-btn" onClick={paySelected}>Save Payment</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {selEmp && (<>
+      {selEmp.visitor && (
+        <div className="sp-card" style={{ color: "#b45309" }}>
+          This person belongs to another branch. Add / edit their salary from <b>All Branches</b>.
+        </div>
+      )}
       {/* ── Entry form ── */}
-      <form className="sp-card" onSubmit={handleSave}>
+      {!selEmp.visitor && <form className="sp-card" onSubmit={handleSave}>
         <div className="sp-card__head">
           <i className={`bi ${editing ? "bi-pencil-square" : "bi-plus-circle"}`}></i>
           <span>{editing ? "Edit Entry" : "New Entry"}</span>
@@ -371,7 +674,7 @@ export default function SalaryBranchC({ variant = "C" }) {
               className="sp-input"
               placeholder="Type employee name…"
               value={empSearch}
-              disabled={editing}
+              disabled={editing || !!selEmp}
               autoComplete="off"
               onChange={(e) => {
                 setEmpSearch(e.target.value);
@@ -423,6 +726,21 @@ export default function SalaryBranchC({ variant = "C" }) {
               onChange={(e) => set("date", e.target.value)}
             />
           </div>
+          {all && (
+            <div className="sp-fg">
+              <label>Worked at Branch<span className="sp-req">*</span></label>
+              <select
+                className="sp-input"
+                value={workBranch}
+                disabled={editing}
+                onChange={(e) => changeWorkBranch(e.target.value)}
+              >
+                {Object.entries(BR_NAME).map(([id, name]) => (
+                  <option key={id} value={id}>{name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="sp-fg">
             <label>Attendance</label>
@@ -487,15 +805,52 @@ export default function SalaryBranchC({ variant = "C" }) {
             <div className="sp-fg">
               <label>Extra (₹)</label>
               {numInput("extra")}
+              {Number(form.extra) > 0 && (
+                <textarea
+                  className="sp-input"
+                  style={{ marginTop: 6, height: 60, padding: 8, resize: "vertical" }}
+                  placeholder="Extra notes (why this extra amount?)"
+                  value={form.extra_note}
+                  onChange={(e) => set("extra_note", e.target.value)}
+                />
+              )}
             </div>
           )}
 
-          {ITEMS.map((it) => (
-            <div className="sp-fg" key={it.key}>
-              <label>{it.label}</label>
-              {numInput(`${it.key}_qty`)}
-            </div>
-          ))}
+          {ITEMS.map((it) =>
+            it.fixed ? (
+              <div className="sp-fg" key={it.key}>
+                <label>{it.label} — Product</label>
+                <select
+                  className="sp-input"
+                  value={form.kambi_product}
+                  onChange={(e) => {
+                    const p = kambiProducts.find((x) => x.name === e.target.value);
+                    setForm((f) => ({ ...f, kambi_product: e.target.value, [`${it.key}_qty`]: p ? p.qty : "" }));
+                  }}
+                >
+                  <option value="">— select product —</option>
+                  {kambiProducts.map((p) => (
+                    <option key={p.name} value={p.name}>{p.name} ({p.qty})</option>
+                  ))}
+                </select>
+                <label style={{ marginTop: 6 }}>{it.label} Qty</label>
+                {numInput(`${it.key}_qty`)}
+                {Number(form[`${it.key}_qty`]) > 0 && (
+                  <small style={{ color: "#64748b" }}>
+                    {inr(selectedEmp?.[it.rate])} ÷ {Number(form[`${it.key}_qty`])} ={" "}
+                    ₹{((Number(selectedEmp?.[it.rate]) || 0) / Number(form[`${it.key}_qty`])).toFixed(4)} per piece ×{" "}
+                    {Number(form[`${it.key}_qty`])} = {inr(totals.items[it.key])}
+                  </small>
+                )}
+              </div>
+            ) : (
+              <div className="sp-fg" key={it.key}>
+                <label>{it.label}</label>
+                {numInput(`${it.key}_qty`)}
+              </div>
+            )
+          )}
 
           {[
             ...(cfg.foodOt
@@ -535,7 +890,13 @@ export default function SalaryBranchC({ variant = "C" }) {
           {[
             ...(perPackFromSalary(form, selectedEmp) === null ? [["Salary", totals.salary, ""]] : []),
             ...(cfg.packs ? [["No of Packs", totals.packAmt, `${Number(form.pack_count) || 0} × ${inr(selectedEmp?.price_per_bags)}`]] : []),
-            ...ITEMS.map((it) => [it.label, totals.items[it.key], `${Number(form[`${it.key}_qty`]) || 0} × ${inr(selectedEmp?.[it.rate])}`]),
+            ...ITEMS.map((it) => [
+              it.label,
+              totals.items[it.key],
+              it.fixed
+                ? `${form.kambi_product ? form.kambi_product + " · " : ""}${Number(form[`${it.key}_qty`]) || 0} qty (fixed ${inr(selectedEmp?.[it.rate])})`
+                : `${Number(form[`${it.key}_qty`]) || 0} × ${inr(selectedEmp?.[it.rate])}`,
+            ]),
             ...(cfg.yesNo ? [["Work", totals.work, form.work_yes === "Yes" ? "Yes" : "No"]] : []),
             ...(cfg.extra || cfg.yesNo ? [["Extra", totals.extra, ""]] : []),
             ...(cfg.foodOt ? [["Food", totals.food, ""], ["OT", totals.ot, ""]] : []),
@@ -566,7 +927,7 @@ export default function SalaryBranchC({ variant = "C" }) {
             </button>
           </div>
         </div>
-      </form>
+      </form>}
 
       {/* ── Records ── */}
       <div className="sp-card">
@@ -609,6 +970,7 @@ export default function SalaryBranchC({ variant = "C" }) {
             <thead>
               <tr>
                 <th>Date</th>
+                {all && <th>Branch</th>}
                 <th>Employee</th>
                 <th>Attendance</th>
                 <th>Salary</th>
@@ -647,6 +1009,7 @@ export default function SalaryBranchC({ variant = "C" }) {
                   return (
                     <tr key={r.id}>
                       <td>{r.date}</td>
+                      {all && <td>{BR_NAME[r.branch_id] || ""}</td>}
                       <td className="sp-strong">
                         {r.employee_name}
                         {(() => {
@@ -677,7 +1040,12 @@ export default function SalaryBranchC({ variant = "C" }) {
                         <td key={it.key}>{c.items[it.key] ? inr(c.items[it.key]) : "—"}</td>
                       ))}
                       {cfg.yesNo && <td>{Number(r.work_yes) ? `Yes · ${inr(c.work)}` : "No"}</td>}
-                      {(cfg.extra || cfg.yesNo) && <td>{c.extra ? inr(c.extra) : "—"}</td>}
+                      {(cfg.extra || cfg.yesNo) && (
+                        <td title={r.extra_note || ""}>
+                          {c.extra ? inr(c.extra) : "—"}
+                          {r.extra_note && <div style={{ fontSize: 11, color: "#64748b", whiteSpace: "normal" }}>{r.extra_note}</div>}
+                        </td>
+                      )}
                       {cfg.foodOt && <td>{c.food ? inr(c.food) : "—"}</td>}
                       {cfg.foodOt && <td>{c.ot ? inr(c.ot) : "—"}</td>}
                       {cfg.petrolTea && <td>{c.petrol ? inr(c.petrol) : "—"}</td>}
@@ -688,6 +1056,9 @@ export default function SalaryBranchC({ variant = "C" }) {
                       </td>
                       <td>
                         <div className="sp-row-actions">
+                          <button className="sp-icon-btn" onClick={() => openStatement(r)} title="Statement">
+                            <i className="bi bi-file-earmark-text"></i>
+                          </button>
                           {isAdmin && (
                             <button className="sp-icon-btn" onClick={() => handleEdit(r)} title="Edit">
                               <i className="bi bi-pencil-fill"></i>
@@ -712,6 +1083,118 @@ export default function SalaryBranchC({ variant = "C" }) {
           </table>
         </div>
       </div>
+      </>)}
+
+      {stmt && (() => {
+        const inRange = (dt) => (!stmtFrom || dt >= stmtFrom) && (!stmtTo || dt <= stmtTo);
+        const rows = records
+          .filter((x) => x.employee_id === stmt.employee_id && inRange(x.date))
+          .sort((a, b) => (a.date < b.date ? -1 : 1));
+        const pays = stmtPays.filter((p) => p.employee_id === stmt.employee_id && inRange(p.payment_date));
+        const calc = rows.map((x) => ({ x, c: calcRow(x) }));
+        const sum = (f) => calc.reduce((t, { c }) => t + (Number(f(c)) || 0), 0);
+        const net = sum((c) => c.total);              // after advance
+        const advance = sum((c) => c.advance);
+        const earned = net + advance;                  // before advance
+        const paid = pays.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+        const balance = net - paid;
+        const days = { P: rows.filter((x) => x.attendance_status === "Present").length,
+                       H: rows.filter((x) => x.attendance_status === "Half Day").length,
+                       A: rows.filter((x) => x.attendance_status === "Absent").length };
+        return (
+          <div className="sp-overlay no-print-bg" onClick={() => setStmt(null)}>
+            <div className="sp-stmt" onClick={(e) => e.stopPropagation()}>
+              <div className="sp-stmt__bar no-print">
+                <b>Salary Statement</b>
+                <input type="date" className="sp-input" value={stmtFrom} onChange={(e) => setStmtFrom(e.target.value)} />
+                <span>to</span>
+                <input type="date" className="sp-input" value={stmtTo} onChange={(e) => setStmtTo(e.target.value)} />
+                <button className="sp-btn" onClick={() => window.print()}>
+                  <i className="bi bi-printer"></i> Print / PDF
+                </button>
+                <button className="sp-btn sp-btn--ghost" onClick={() => setStmt(null)}>Close</button>
+              </div>
+
+              <div id="sal-stmt-print">
+                <div className="sp-stmt__head">
+                  <h2>BIP FENCING — Salary Statement</h2>
+                  <div><b>{stmt.name}</b> · {cfg.title.replace("Salary — ", "")}</div>
+                  <div>
+                    {new Date().toLocaleDateString("en-GB").replace(/\//g, "-")}
+                    {[["Present", days.P], ["Half Day", days.H], ["Absent", days.A]]
+                      .filter(([, n]) => n > 0)
+                      .map(([l, n]) => ` · ${l} ${n}`)
+                      .join("")}
+                  </div>
+                </div>
+                <table className="sp-stmt__table">
+                  <thead>
+                    <tr>
+                      <th>Date</th><th>Attendance</th><th>Salary</th>
+                      {cfg.packs && <th>Packs</th>}
+                      {ITEMS.map((it) => <th key={it.key}>{it.label}</th>)}
+                      {(cfg.extra || cfg.yesNo) && <th>Extra</th>}
+                      {cfg.foodOt && <th>Food</th>}{cfg.foodOt && <th>OT</th>}
+                      {cfg.petrolTea && <th>Petrol</th>}{cfg.petrolTea && <th>Tea</th>}
+                      <th>Advance</th><th>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {calc.length === 0 && (
+                      <tr><td colSpan={20} style={{ textAlign: "center", padding: 16 }}>No entries in this period</td></tr>
+                    )}
+                    {calc.map(({ x, c }) => (
+                      <tr key={x.id}>
+                        <td>{x.date}</td>
+                        <td>{x.attendance_status || "—"}</td>
+                        <td>{inr(c.salary)}</td>
+                        {cfg.packs && <td>{Number(x.pack_count) || 0} · {inr(c.packAmt)}</td>}
+                        {ITEMS.map((it) => <td key={it.key}>{inr(c.items[it.key])}</td>)}
+                        {(cfg.extra || cfg.yesNo) && (
+                          <td>
+                            {inr(c.extra)}
+                            {x.extra_note && <div style={{ fontSize: 11, color: "#64748b", whiteSpace: "normal" }}>{x.extra_note}</div>}
+                          </td>
+                        )}
+                        {cfg.foodOt && <td>{inr(c.food)}</td>}{cfg.foodOt && <td>{inr(c.ot)}</td>}
+                        {cfg.petrolTea && <td>{inr(c.petrol)}</td>}{cfg.petrolTea && <td>{inr(c.tea)}</td>}
+                        <td className="sp-neg">{c.advance ? `−${inr(c.advance)}` : "—"}</td>
+                        <td><b>{inr(c.total)}</b></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="sp-stmt__sum">
+                  <div><span>Total Earned</span><b>{inr(earned)}</b></div>
+                  <div><span>Advance taken</span><b className="sp-neg">−{inr(advance)}</b></div>
+                  <div><span>Paid</span><b className="sp-neg">−{inr(paid)}</b></div>
+                  <div className="sp-stmt__bal"><span>Balance to pay</span><b>{inr(balance)}</b></div>
+                </div>
+
+                {pays.length > 0 && (
+                  <table className="sp-stmt__table" style={{ marginTop: 10 }}>
+                    <thead><tr><th>Paid on</th><th>Amount</th><th>Note</th><th className="no-print"></th></tr></thead>
+                    <tbody>
+                      {pays.map((p) => (
+                        <tr key={p.id}>
+                          <td>{p.payment_date}</td><td>{inr(p.amount)}</td><td>{p.note || ""}</td>
+                          <td className="no-print">
+                            <button className="sp-icon-btn sp-icon-btn--del" onClick={() => deletePayment(p.id)} title="Delete">
+                              <i className="bi bi-trash-fill"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
 
       {deleteTarget && (
         <div className="sp-overlay" onClick={() => setDeleteTarget(null)}>
@@ -820,6 +1303,29 @@ export default function SalaryBranchC({ variant = "C" }) {
         .sp-badge--absent { background: #fee2e2; color: #dc2626; }
         .sp-badge--other { background: #f1f5f9; color: #475569; }
         .sp-row-actions { display: flex; gap: 6px; }
+        .sp-overlay.no-print-bg { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding: 30px 12px; overflow-y: auto; }
+        .sp-stmt { background: #fff; border-radius: 14px; width: 100%; max-width: 1100px; padding: 18px; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+        .sp-stmt__bar, .sp-stmt__pay { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+        .sp-stmt__bar .sp-input, .sp-stmt__pay .sp-input { width: auto; min-width: 140px; }
+        .sp-stmt__pay { margin: 16px 0 0; padding-top: 14px; border-top: 1px dashed #cbd5e1; }
+        .sp-btn { padding: 9px 16px; border-radius: 8px; border: none; background: #16a34a; color: #fff; font-weight: 700; cursor: pointer; }
+        .sp-btn--ghost { background: #f1f5f9; color: #334155; }
+        .sp-stmt__head { text-align: center; margin-bottom: 10px; }
+        .sp-stmt__head h2 { margin: 0 0 4px; font-size: 20px; }
+        .sp-stmt__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .sp-stmt__table th, .sp-stmt__table td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; white-space: nowrap; }
+        .sp-stmt__table th:first-child, .sp-stmt__table td:first-child, .sp-stmt__table td:nth-child(2) { text-align: left; }
+        .sp-stmt__table thead th { background: #f1f5f9; }
+        .sp-stmt__sum { margin: 12px 0 0 auto; max-width: 360px; font-size: 14px; }
+        .sp-stmt__sum div { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #e2e8f0; }
+        .sp-stmt__bal { font-size: 16px; color: #15803d; border-bottom: none !important; }
+        @media print {
+          body * { visibility: hidden !important; }
+          #sal-stmt-print, #sal-stmt-print * { visibility: visible !important; }
+          #sal-stmt-print { position: absolute; top: 0; left: 0; width: 100%; }
+          .no-print { display: none !important; }
+          @page { size: A4 landscape; margin: 8mm; }
+        }
         .sp-icon-btn { width: 32px; height: 32px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; color: #334155; }
         .sp-icon-btn--del { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
 

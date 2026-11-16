@@ -10,16 +10,15 @@ const UNITS = ["Pcs", "Kg", "Meter", "Roll", "Box", "Set", "Liter", "Ton", "Nos"
 const emptyForm = {
   productName: "",
   hsn: "",
+  branchChoice: "all", // Add Product only: "all" = every branch, or one branch id
   unit: "Pcs",
   productDate: todayDate(),
   factoryPrice: "",
   sellingPrice: "",
   stockQty: "",
   minStock: "",
+  kambiQty: "",
   description: "",
-  supplier: "",
-  sku: "",
-  reference: "",
 };
 
 const STOCK_META = {
@@ -78,10 +77,9 @@ function mapFromDB(p) {
     sellingPrice: p.selling_price,
     stockQty: p.stock_qty,
     minStock: p.min_stock,
+    kambiQty: Number(p.kambi_qty) || "",
     description: p.description,
     branchId: p.branch_id,
-    supplier: p.supplier || "",
-    sku: p.sku || "",
   };
 }
 
@@ -95,11 +93,8 @@ function mapDamageFromDB(d) {
   };
 }
 
-// mode="own"      -> Product Catalog  (/products.php)          unchanged
-// mode="purchase" -> Purchase Catalog (/purchase_products.php) same page, same logic
-export default function Products({ mode = "own" }) {
-  const isPurchase = mode === "purchase";
-  const API = isPurchase ? "/purchase_products.php" : "/products.php";
+export default function Products() {
+  const API = "/products.php";
   const navigate = useNavigate();
 
   const [form, setForm] = useState(emptyForm);
@@ -135,7 +130,6 @@ export default function Products({ mode = "own" }) {
 
   useEffect(() => {
     fetchProducts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -151,9 +145,14 @@ export default function Products({ mode = "own" }) {
     const lowerCaseName = productName.toLowerCase().trim();
 
     // Only check products that belong to the current branch
-    const currentBranchProducts = products.filter(
-      (p) => p.branchId === currentBranchId,
-    );
+    // (when adding to one chosen branch, check that branch instead)
+    const checkBranch =
+      excludeId === null && form.branchChoice && form.branchChoice !== "all"
+        ? String(form.branchChoice)
+        : null;
+    const currentBranchProducts = checkBranch
+      ? products.filter((p) => String(p.branchId) === checkBranch)
+      : products.filter((p) => p.branchId === currentBranchId);
 
     return currentBranchProducts.some(
       (p) =>
@@ -166,7 +165,7 @@ export default function Products({ mode = "own" }) {
     setLoading(true);
     setError("");
     try {
-      const res = await apiFetch(API);
+      const res = await apiFetch("/products.php");
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data = await res.json();
       const loaded = data.map(mapFromDB);
@@ -208,7 +207,7 @@ export default function Products({ mode = "own" }) {
     setDamageLoading(true);
     setError("");
     try {
-      const res = await apiFetch(`${API}?damage=1`);
+      const res = await apiFetch("/products.php?damage=1");
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data = await res.json();
       setDamageLog(data.map(mapDamageFromDB));
@@ -250,7 +249,7 @@ export default function Products({ mode = "own" }) {
       return;
     }
     try {
-      const res = await apiFetch(`${API}?damage=1&id=${id}`, {
+      const res = await apiFetch(`/products.php?damage=1&id=${id}`, {
         method: "PUT",
         body: JSON.stringify({
           qty,
@@ -274,7 +273,7 @@ export default function Products({ mode = "own" }) {
     if (!deleteConfirmDamage) return;
     const id = deleteConfirmDamage.id;
     try {
-      const res = await apiFetch(`${API}?damage=1&id=${id}`, {
+      const res = await apiFetch(`/products.php?damage=1&id=${id}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -310,7 +309,7 @@ export default function Products({ mode = "own" }) {
       return;
     }
     try {
-      const res = await apiFetch(`${API}?action=stock-in&id=${id}`, {
+      const res = await apiFetch(`/products.php?action=stock-in&id=${id}`, {
         method: "POST",
         body: JSON.stringify({ qty }),
       });
@@ -351,7 +350,7 @@ export default function Products({ mode = "own" }) {
     }
     setError("");
     try {
-      const res = await apiFetch(`${API}?action=stock-out&id=${p.id}`, {
+      const res = await apiFetch(`/products.php?action=stock-out&id=${p.id}`, {
         method: "POST",
         body: JSON.stringify({ qty }),
       });
@@ -396,17 +395,23 @@ export default function Products({ mode = "own" }) {
       if (editingId !== null) {
         const extra = Number(addStockQty) || 0;
         const finalQty = Number(form.stockQty) + extra;
-        res = await apiFetch(`${API}?id=${editingId}`, {
+        res = await apiFetch(`/products.php?id=${editingId}`, {
           method: "PUT",
           body: JSON.stringify({
             ...form,
+            branchChoice: undefined,
             stockQty: finalQty,
           }),
         });
       } else {
-        res = await apiFetch(API, {
+        const { branchChoice, ...productBody } = form;
+        res = await apiFetch("/products.php", {
           method: "POST",
-          body: JSON.stringify(form),
+          body: JSON.stringify({
+            ...productBody,
+            // "all" -> every branch (existing behaviour); otherwise only that branch
+            ...(branchChoice && branchChoice !== "all" ? { branch_id: Number(branchChoice) } : {}),
+          }),
         });
       }
       if (!res.ok) {
@@ -448,10 +453,8 @@ export default function Products({ mode = "own" }) {
       sellingPrice: p.sellingPrice,
       stockQty: p.stockQty,
       minStock: p.minStock,
+      kambiQty: p.kambiQty,
       description: p.description,
-      supplier: p.supplier || "",
-      sku: p.sku || "",
-      reference: "",
     });
     setEditingId(p.id);
     setAddStockQty("");
@@ -463,7 +466,7 @@ export default function Products({ mode = "own" }) {
     if (!deleteConfirmProduct) return;
     const id = deleteConfirmProduct.id;
     try {
-      const res = await apiFetch(`${API}?id=${id}`, {
+      const res = await apiFetch(`/products.php?id=${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error("Delete failed");
@@ -647,9 +650,9 @@ export default function Products({ mode = "own" }) {
               <i className="bi bi-box-seam-fill"></i>
             </div>
             <div>
-              <h1 className="at-header__title">{isPurchase ? "Purchase Catalog" : "Products"}</h1>
+              <h1 className="at-header__title">Products</h1>
               <p className="at-header__sub">
-                {isPurchase ? "Products purchased from suppliers" : "Product & Inventory Management"}
+                Product & Inventory Management
               </p>
             </div>
           </div>
@@ -659,26 +662,10 @@ export default function Products({ mode = "own" }) {
             </button>
           ) : (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {isPurchase ? (
-                <>
-                  <button className="at-btn at-btn--ghost" onClick={() => navigate("/products")}>
-                    <i className="bi bi-box-seam"></i> Product Catalog
-                  </button>
-                  <button className="at-btn at-btn--primary" onClick={openAddForm}>
-                    <i className="bi bi-cart-plus"></i> Add Purchase
-                  </button>
-                </>
-              ) : (
-                <>
-                  {isAdmin && (
-                    <button className="at-btn at-btn--primary" onClick={openAddForm}>
-                      <i className="bi bi-plus-lg"></i> Add Product
-                    </button>
-                  )}
-                  <button className="at-btn at-btn--primary" onClick={() => navigate("/purchase-catalog")}>
-                    <i className="bi bi-bag-check"></i> Purchase Catalog
-                  </button>
-                </>
+              {isAdmin && (
+                <button className="at-btn at-btn--primary" onClick={openAddForm}>
+                  <i className="bi bi-plus-lg"></i> Add Product
+                </button>
               )}
             </div>
           )}
@@ -788,8 +775,8 @@ export default function Products({ mode = "own" }) {
                   ></i>
                   <span>
                     {editingId !== null
-                      ? isPurchase ? "Edit Purchase Product" : "Edit Product"
-                      : isPurchase ? "Add Purchase" : "Add New Product"}
+                      ? "Edit Product"
+                      : "Add New Product"}
                   </span>
                 </div>
               </div>
@@ -814,17 +801,35 @@ export default function Products({ mode = "own" }) {
                   )}
                 </div>
                 <div className="at-fg">
-                  <label className="at-label">HSN</label>
+                  <label className="at-label">HSN Code</label>
                   <input
                     className={`at-input ${hsnDup ? "error-field" : ""}`}
                     name="hsn"
                     value={form.hsn}
                     onChange={handleChange}
-                    placeholder="e.g. PRD-001"
+                    placeholder="e.g. 7314"
                   />
                 </div>
+                {editingId === null && (
+                  <div className="at-fg">
+                    <label className="at-label">Branch</label>
+                    <select
+                      className="at-select"
+                      name="branchChoice"
+                      value={form.branchChoice}
+                      onChange={handleChange}
+                    >
+                      <option value="all">All Branch</option>
+                      {[1, 2, 3].map((id) => (
+                        <option key={id} value={id}>
+                          {branchLabel(id)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="at-fg">
-                  <label className="at-label">{isPurchase ? "Purchase Date" : "Date"}</label>
+                  <label className="at-label">Date</label>
                   <input
                     type="date"
                     className="at-input"
@@ -833,24 +838,6 @@ export default function Products({ mode = "own" }) {
                     onChange={handleChange}
                   />
                 </div>
-                {isPurchase && (
-                  <>
-                    <div className="at-fg">
-                      <label className="at-label">Supplier</label>
-                      <input className="at-input" name="supplier" value={form.supplier} onChange={handleChange} />
-                    </div>
-                    <div className="at-fg">
-                      <label className="at-label">Product Code / SKU</label>
-                      <input className="at-input" name="sku" value={form.sku} onChange={handleChange} />
-                    </div>
-                    {editingId === null && (
-                      <div className="at-fg">
-                        <label className="at-label">Purchase Bill / Reference</label>
-                        <input className="at-input" name="reference" value={form.reference} onChange={handleChange} />
-                      </div>
-                    )}
-                  </>
-                )}
               </div>
               <div className="at-form-grid at-form-grid--4">
                 <div className="at-fg">
@@ -867,7 +854,7 @@ export default function Products({ mode = "own" }) {
                   </select>
                 </div>
                 <div className="at-fg">
-                  <label className="at-label">{isPurchase ? "Purchase Price (INR)" : "Factory Price (INR)"}</label>
+                  <label className="at-label">Factory Price (INR)</label>
                   <input
                     type="number"
                     className="at-input"
@@ -909,7 +896,7 @@ export default function Products({ mode = "own" }) {
                 style={{ marginBottom: 20 }}
               >
                 <div className="at-fg">
-                  <label className="at-label">{isPurchase && editingId === null ? "Quantity Purchased" : "Current Stock Qty"}</label>
+                  <label className="at-label">Current Stock Qty</label>
                   {(() => {
                     const extra = Number(addStockQty) || 0;
                     const base = Number(form.stockQty) || 0;
@@ -992,6 +979,23 @@ export default function Products({ mode = "own" }) {
                     Alert triggers when stock is at or below this value
                   </span>
                 </div>
+                <div className="at-fg at-fg--2">
+                  <label className="at-label">Kambi Kattu Qty (fixed)</label>
+                  <input
+                    type="number"
+                    className="at-input"
+                    name="kambiQty"
+                    value={form.kambiQty}
+                    onChange={handleChange}
+                    onWheel={(e) => e.target.blur()}
+                    placeholder="e.g. 10"
+                    min="0"
+                    step="any"
+                  />
+                  <span className="at-hint">
+                    Salary page: pick this product → Kambi Kattu qty fills with this number
+                  </span>
+                </div>
               </div>
               <div className="at-fg" style={{ marginBottom: 20 }}>
                 <label className="at-label">Description</label>
@@ -1010,8 +1014,8 @@ export default function Products({ mode = "own" }) {
                     className={`bi ${editingId !== null ? "bi-check-circle" : "bi-check-lg"}`}
                   ></i>
                   {editingId !== null
-                    ? isPurchase ? "Update Purchase Product" : "Update Product"
-                    : isPurchase ? "Save Purchase" : "Save Product"}
+                    ? "Update Product"
+                    : "Save Product"}
                 </button>
                 <button
                   type="button"
@@ -1047,7 +1051,7 @@ export default function Products({ mode = "own" }) {
                 <div className="at-card__head">
                   <div className="at-card__head-left">
                     <i className="bi bi-box-seam"></i>
-                    <span>{isPurchase ? "Purchase Catalog" : "Product Catalog"}</span>
+                    <span>Product Catalog</span>
                   </div>
                   <span className="at-card__count">
                     {loading
@@ -1122,25 +1126,13 @@ export default function Products({ mode = "own" }) {
                                 {p.unit}
                               </div>
                               <div className="at-bubble-stat">
-                                <b>{isPurchase ? "Purchase Price" : "Factory Price"}</b>
+                                <b>Factory Price</b>
                                 &#8377;{Number(p.factoryPrice || 0).toFixed(2)}
                               </div>
                               <div className="at-bubble-stat">
                                 <b>Selling Price</b>
                                 &#8377;{Number(p.sellingPrice || 0).toFixed(2)}
                               </div>
-                              {isPurchase && p.supplier && (
-                                <div className="at-bubble-stat">
-                                  <b>Supplier</b>
-                                  {p.supplier}
-                                </div>
-                              )}
-                              {isPurchase && p.sku && (
-                                <div className="at-bubble-stat">
-                                  <b>Code / SKU</b>
-                                  {p.sku}
-                                </div>
-                              )}
                               <div className="at-bubble-stat">
                                 <b>Branch</b>
                                 <span style={{ color: "#047857", fontWeight: 700 }}>
@@ -1176,7 +1168,7 @@ export default function Products({ mode = "own" }) {
                                   title="View stock-in / stock-out statement of this product"
                                   onClick={() =>
                                     navigate(
-                                      `/statements?type=product&product_id=${p.id}&src=${isPurchase ? "purchase" : "product"}&product=${encodeURIComponent(p.productName || "")}${p.branchId ? `&branch=${p.branchId}` : ""}`,
+                                      `/statements?type=product&product_id=${p.id}&src=product&product=${encodeURIComponent(p.productName || "")}${p.branchId ? `&branch=${p.branchId}` : ""}`,
                                     )
                                   }
                                 >

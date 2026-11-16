@@ -27,6 +27,7 @@ import Salary from "./pages/Salary";
 
 // CRM
 import Clients from "./pages/Clients";
+import GovTax from "./pages/GovTax";
 
 // Reports
 import Statements from "./pages/Statements";
@@ -65,7 +66,6 @@ function AppRoutes() {
         {/* Stock Management */}
         <Route path="purchase-inventory" element={<PurchaseInventory />} />
         <Route path="products" element={<Products key="own" />} />
-        <Route path="purchase-catalog" element={<Products key="purchase" mode="purchase" />} />
 
         {/* Staff Management */}
         {/* <Route path="admin-features" element={<AdminFeatures />} /> */}
@@ -90,6 +90,14 @@ function AppRoutes() {
           element={
             <AdminRoute>
               <Clients />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="gov-tax"
+          element={
+            <AdminRoute>
+              <GovTax />
             </AdminRoute>
           }
         />

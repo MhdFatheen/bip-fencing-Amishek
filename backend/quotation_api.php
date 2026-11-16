@@ -20,11 +20,18 @@ require_once __DIR__ . '/auth_middleware.php';   // sets $authUser, uses $pdo
 foreach ([
     'is_gst'    => "TINYINT(1) NOT NULL DEFAULT 1",
     'round_off' => "DECIMAL(10,2) NULL",
+    'gst_type'  => "VARCHAR(10) NOT NULL DEFAULT 'cgst_sgst'",   // 'cgst_sgst' | 'igst'
 ] as $col => $def) {
     $chk = $pdo->query("SHOW COLUMNS FROM quotations LIKE '$col'");
     if ($chk && !$chk->fetch()) {
         $pdo->exec("ALTER TABLE quotations ADD $col $def");
     }
+}
+
+// quotation_items.branch_id: which branch the row's product came from (NULL = All Branch)
+$__qb = $pdo->query("SHOW COLUMNS FROM quotation_items LIKE 'branch_id'");
+if ($__qb && !$__qb->fetch()) {
+    $pdo->exec("ALTER TABLE quotation_items ADD branch_id INT NULL DEFAULT NULL");
 }
 
 // ── Resolve effective branch ID ───────────────────────────────
@@ -181,13 +188,13 @@ function handleCreate(): void {
              client_name, client_phone, client_email, client_gst, client_address, client_state, client_state_code,
              ship_name, ship_address, ship_gst, ship_state, ship_state_code,
              discount_percent, tax_percent, notes, declaration, unit_qty, price_unit,
-             is_gst, round_off, branch_id)
+             is_gst, round_off, gst_type, branch_id)
         VALUES
             (:quote_no, :quote_date, :valid_until, :po_no, :dispatched_through, :vehicle_no, :other_ref,
              :client_name, :client_phone, :client_email, :client_gst, :client_address, :client_state, :client_state_code,
              :ship_name, :ship_address, :ship_gst, :ship_state, :ship_state_code,
              :discount_percent, :tax_percent, :notes, :declaration, :unit_qty, :price_unit,
-             :is_gst, :round_off, :branch_id)
+             :is_gst, :round_off, :gst_type, :branch_id)
     ");
     $stmt->execute(array_merge($f, [':branch_id' => $branchId]));
     $quotationId = (int) $pdo->lastInsertId();
@@ -234,7 +241,7 @@ function handleUpdate(): void {
             discount_percent=:discount_percent, tax_percent=:tax_percent,
             notes=:notes, declaration=:declaration,
             unit_qty=:unit_qty, price_unit=:price_unit,
-            is_gst=:is_gst, round_off=:round_off
+            is_gst=:is_gst, round_off=:round_off, gst_type=:gst_type
         WHERE id=:id
     ");
     $stmt->execute(array_merge($f, [':id' => $id]));
@@ -301,6 +308,7 @@ function sanitiseFields(array $data): array {
         ':declaration'        => $s('declaration')       ?: null,
         ':unit_qty'           => (isset($data['unitQty']) && $data['unitQty'] !== '') ? (float) $data['unitQty'] : null,
         ':price_unit'         => $s('priceUnit')         ?: null,
+        ':gst_type'           => (($data['gstType'] ?? '') === 'igst') ? 'igst' : 'cgst_sgst',
         ':is_gst'             => array_key_exists('isGst', $data) ? ($data['isGst'] ? 1 : 0) : 1,
         ':round_off'          => (isset($data['manualRoundOff']) && $data['manualRoundOff'] !== '' && is_numeric($data['manualRoundOff']))
                                     ? round((float) $data['manualRoundOff'], 2) : null,
@@ -309,8 +317,8 @@ function sanitiseFields(array $data): array {
 
 function insertItems(PDO $pdo, int $quotationId, array $items): void {
     $stmt = $pdo->prepare("
-        INSERT INTO quotation_items (quotation_id, description, hsn, due_on, unit, quantity, rate, amount)
-        VALUES (:quotation_id, :description, :hsn, :due_on, :unit, :quantity, :rate, :amount)
+        INSERT INTO quotation_items (quotation_id, description, hsn, due_on, unit, quantity, rate, amount, branch_id)
+        VALUES (:quotation_id, :description, :hsn, :due_on, :unit, :quantity, :rate, :amount, :branch_id)
     ");
     foreach ($items as $item) {
         $desc = trim((string) ($item['description'] ?? ''));
@@ -327,6 +335,7 @@ function insertItems(PDO $pdo, int $quotationId, array $items): void {
             ':quantity'     => $qty,
             ':rate'         => $rate,
             ':amount'       => round($qty * $rate, 2),
+            ':branch_id'    => (!empty($item['branchId']) && is_numeric($item['branchId'])) ? (int) $item['branchId'] : null,
         ]);
     }
 }

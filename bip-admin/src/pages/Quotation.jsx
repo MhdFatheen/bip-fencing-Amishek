@@ -235,6 +235,7 @@ const UNIT_MAP = {
 const UNITS = ["NOS", "KGS", "MTR", "SQM", "RFT", "SET", "PCS", "LTR", "FEET"];
 
 const emptyItem = () => ({
+  branchId: "all", // "all" or 1 / 2 / 3 — decides which branch's products the catalog shows
   description: "",
   hsn: "",
   dueOn: "",
@@ -268,6 +269,7 @@ const emptyForm = () => ({
   priceUnit: "NOS",
   unitQty: "",
   isGst: true,
+  gstType: "cgst_sgst", // "cgst_sgst" | "igst"
   taxPercent: 18,
   notes: "",
   declaration: DECLARATION,
@@ -281,7 +283,7 @@ const emptyForm = () => ({
 
 // ─── ONE formula used by form, list & bill ─────────────────────────────────
 // rate is entered WITHOUT tax; discount then GST are applied on top.
-const calcTotals = (items, discount, tax, manualRound) => {
+const calcTotals = (items, discount, tax, manualRound, igstOn = false) => {
   const subtotal = items.reduce(
     (s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.rateIncl) || 0),
     0,
@@ -289,11 +291,13 @@ const calcTotals = (items, discount, tax, manualRound) => {
   const discountAmt = subtotal * ((parseFloat(discount) || 0) / 100);
   const taxable = subtotal - discountAmt;
   const taxAmt = taxable * ((parseFloat(tax) || 0) / 100);
-  const cgst = taxAmt / 2;
-  const sgst = taxAmt / 2;
+  // IGST = one tax line; CGST + SGST = two equal halves (as before)
+  const cgst = igstOn ? 0 : taxAmt / 2;
+  const sgst = igstOn ? 0 : taxAmt / 2;
+  const igst = igstOn ? taxAmt : 0;
   const roundOff = resolveRoundOff(manualRound, taxable + taxAmt);
   const grandTotal = taxable + taxAmt + roundOff;
-  return { subtotal, discountAmt, taxable, taxAmt, cgst, sgst, roundOff, grandTotal };
+  return { subtotal, discountAmt, taxable, taxAmt, cgst, sgst, igst, roundOff, grandTotal };
 };
 
 // ─── MAIN COMPONENT ─────────────────────────────────────────────────────────
@@ -384,6 +388,7 @@ export default function Quotation() {
     form.discount,
     form.isGst ? form.taxPercent : 0,
     form.manualRoundOff,
+    form.isGst && form.gstType === "igst",
   );
 
   // ── Central customer database: phone is the key ─────────────
@@ -562,6 +567,7 @@ export default function Quotation() {
         discount: data.discount_percent ?? 0,
         isGst: data.is_gst == null ? true : !!Number(data.is_gst),
         taxPercent: data.tax_percent ?? 18,
+        gstType: data.gst_type === "igst" ? "igst" : "cgst_sgst",
         manualRoundOff: data.round_off ?? "",
         notes: data.notes || "",
         declaration: data.declaration || DECLARATION,
@@ -570,6 +576,7 @@ export default function Quotation() {
         items: data.items?.length
           ? data.items.map((i) => ({
               description: i.description,
+              branchId: i.branch_id ? Number(i.branch_id) : "all",
               hsn: i.hsn || "",
               dueOn: i.due_on || "",
               unit: i.unit || "NOS",
@@ -639,6 +646,7 @@ export default function Quotation() {
     const isGst = d.is_gst == null ? true : !!Number(d.is_gst);
     const disc = parseFloat(d.discount_percent) || 0;
     const tax = isGst ? parseFloat(d.tax_percent) || 0 : 0;
+    const isIgst = isGst && d.gst_type === "igst"; // single IGST instead of CGST + SGST
     const rows = (d.items || []).map((i) => ({
       ...i,
       qty: parseFloat(i.quantity) || 0,
@@ -651,12 +659,15 @@ export default function Quotation() {
       disc,
       tax,
       d.round_off,
+      isIgst,
     );
     const taxable = P.taxable;
-    const cgstRate = tax / 2;
-    const sgstRate = tax / 2;
+    const cgstRate = isIgst ? 0 : tax / 2;
+    const sgstRate = isIgst ? 0 : tax / 2;
+    const igstRate = isIgst ? tax : 0;
     const cgstAmt = P.cgst;
     const sgstAmt = P.sgst;
+    const igstAmt = P.igst;
     const totalTax = P.taxAmt;
     const roundOff = P.roundOff;
     const netAmount = P.grandTotal;
@@ -665,10 +676,11 @@ export default function Quotation() {
     rows.forEach((r) => {
       const key = r.hsn || "–";
       const t = r.qty * r.rate * (1 - disc / 100);
-      if (!hsnGroups[key]) hsnGroups[key] = { taxable: 0, cgst: 0, sgst: 0 };
+      if (!hsnGroups[key]) hsnGroups[key] = { taxable: 0, cgst: 0, sgst: 0, igst: 0 };
       hsnGroups[key].taxable += t;
       hsnGroups[key].cgst += t * (cgstRate / 100);
       hsnGroups[key].sgst += t * (sgstRate / 100);
+      hsnGroups[key].igst += t * (igstRate / 100);
     });
 
     const dynFont = rows.length <= 10 ? 11 : rows.length <= 20 ? 12 : rows.length <= 30 ? 11 : 10;
@@ -972,7 +984,15 @@ export default function Quotation() {
                   </td>
                   <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(taxable)}</td>
                 </tr>
-                {isGst && (
+                {isIgst && (
+                  <tr>
+                    <td colSpan={2} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
+                      IGST TAX
+                    </td>
+                    <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(igstAmt)}</td>
+                  </tr>
+                )}
+                {isGst && !isIgst && (
                   <>
                     <tr>
                       <td colSpan={2} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
@@ -1044,25 +1064,46 @@ export default function Quotation() {
               className="inv-footer"
             >
               <colgroup>
-                <col style={{ width: "14%" }} />
-                <col style={{ width: "16%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "14%" }} />
-                <col style={{ width: "14%" }} />
-                <col style={{ width: "16%" }} />
-                <col style={{ width: "16%" }} />
+                {isIgst ? (
+                  <>
+                    <col style={{ width: "22%" }} />
+                    <col style={{ width: "26%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "20%" }} />
+                    <col style={{ width: "18%" }} />
+                  </>
+                ) : (
+                  <>
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "16%" }} />
+                  </>
+                )}
               </colgroup>
               <thead>
                 <tr>
-                  {[
-                    ["HSN/SAC", "center"],
-                    ["Taxable\nValue", "right"],
-                    ["CGST\nRate", "center"],
-                    ["CGST\nAmount", "right"],
-                    ["SGST/UTGST\nRate", "center"],
-                    ["SGST/UTGST\nAmount", "right"],
-                    ["Total Tax\nAmount", "right"],
-                  ].map(([label, align]) => (
+                  {(isIgst
+                    ? [
+                        ["HSN/SAC", "center"],
+                        ["Taxable\nValue", "right"],
+                        ["IGST\nRate", "center"],
+                        ["IGST\nAmount", "right"],
+                        ["Total Tax\nAmount", "right"],
+                      ]
+                    : [
+                        ["HSN/SAC", "center"],
+                        ["Taxable\nValue", "right"],
+                        ["CGST\nRate", "center"],
+                        ["CGST\nAmount", "right"],
+                        ["SGST/UTGST\nRate", "center"],
+                        ["SGST/UTGST\nAmount", "right"],
+                        ["Total Tax\nAmount", "right"],
+                      ]
+                  ).map(([label, align]) => (
                     <th
                       key={label}
                       style={dhc({ textAlign: align, whiteSpace: "pre-line", padding: "2px 6px", fontSize: 10 })}
@@ -1077,20 +1118,36 @@ export default function Quotation() {
                   <tr key={hsn}>
                     <td style={dc({ textAlign: "center", fontSize: 11 })}>{hsn}</td>
                     <td style={dc({ textAlign: "right", fontSize: 11 })}>{fmt2(g.taxable)}</td>
-                    <td style={dc({ textAlign: "center", fontSize: 10 })}>{cgstRate}%</td>
-                    <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.cgst)}</td>
-                    <td style={dc({ textAlign: "center", fontSize: 10 })}>{sgstRate}%</td>
-                    <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.sgst)}</td>
-                    <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.cgst + g.sgst)}</td>
+                    {isIgst ? (
+                      <>
+                        <td style={dc({ textAlign: "center", fontSize: 10 })}>{igstRate}%</td>
+                        <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.igst)}</td>
+                        <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.igst)}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={dc({ textAlign: "center", fontSize: 10 })}>{cgstRate}%</td>
+                        <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.cgst)}</td>
+                        <td style={dc({ textAlign: "center", fontSize: 10 })}>{sgstRate}%</td>
+                        <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.sgst)}</td>
+                        <td style={dc({ textAlign: "right", fontSize: 10 })}>{fmt2(g.cgst + g.sgst)}</td>
+                      </>
+                    )}
                   </tr>
                 ))}
                 <tr style={{ background: "#f5f5f5", fontWeight: "bold" }}>
                   <td style={dc({ borderTop: B, borderBottom: B, fontSize: 10 })}>Total</td>
                   <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(taxable)}</td>
                   <td style={dc({ borderTop: B, borderBottom: B })}></td>
-                  <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(cgstAmt)}</td>
-                  <td style={dc({ borderTop: B, borderBottom: B })}></td>
-                  <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(sgstAmt)}</td>
+                  {isIgst ? (
+                    <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(igstAmt)}</td>
+                  ) : (
+                    <>
+                      <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(cgstAmt)}</td>
+                      <td style={dc({ borderTop: B, borderBottom: B })}></td>
+                      <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(sgstAmt)}</td>
+                    </>
+                  )}
                   <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: 10 })}>{fmt2(totalTax)}</td>
                 </tr>
               </tbody>
@@ -1498,6 +1555,15 @@ export default function Quotation() {
                   </div>
                 </div>
               )}
+              {form.isGst && (
+                <div className="at-fg">
+                  <label className="at-label">GST Type</label>
+                  <select name="gstType" value={form.gstType} onChange={handleChange} className="at-select">
+                    <option value="cgst_sgst">CGST + SGST</option>
+                    <option value="igst">IGST</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1676,10 +1742,11 @@ export default function Quotation() {
             </div>
 
             <div className="at-table-wrap">
-              <table className="at-table" style={{ minWidth: 900 }}>
+              <table className="at-table" style={{ minWidth: 1020 }}>
                 <thead>
                   <tr>
                     <th style={{ width: 32 }}>#</th>
+                    <th style={{ width: 120 }}>Branch</th>
                     <th style={{ minWidth: 240 }}>Description</th>
                     <th style={{ width: 80 }}>HSN/SAC</th>
                     <th style={{ width: 110 }}>Due On</th>
@@ -1724,8 +1791,14 @@ export default function Quotation() {
                 <div className="muted">Taxable Value: ₹ {fmt2(T.taxable)}</div>
                 {form.isGst && (
                   <div className="muted">
-                    CGST {Number(form.taxPercent) / 2}%: ₹ {fmt2(T.cgst)} | SGST {Number(form.taxPercent) / 2}%: ₹{" "}
-                    {fmt2(T.sgst)}
+                    {form.gstType === "igst" ? (
+                      <>IGST {Number(form.taxPercent)}%: ₹ {fmt2(T.igst)}</>
+                    ) : (
+                      <>
+                        CGST {Number(form.taxPercent) / 2}%: ₹ {fmt2(T.cgst)} | SGST {Number(form.taxPercent) / 2}%: ₹{" "}
+                        {fmt2(T.sgst)}
+                      </>
+                    )}
                   </div>
                 )}
                 <div
@@ -1833,6 +1906,12 @@ export default function Quotation() {
 const BRANCH_NAMES = BRANCH_LABELS; // display names only
 
 function ItemRow({ item, idx, products, onChange, onProductSelect, onRemove, canRemove, units }) {
+  // Catalog follows the row's Branch (All Branch = every product, as before)
+  const rowBranch = item.branchId && item.branchId !== "all" ? Number(item.branchId) : null;
+  const catalog = rowBranch
+    ? products.filter((p) => !p.branch_id || Number(p.branch_id) === rowBranch)
+    : products;
+
   const handleDropdown = (e) => {
     const id = e.target.value;
     onProductSelect(idx, id ? products.find((p) => String(p.id) === id) || null : null);
@@ -1844,11 +1923,25 @@ function ItemRow({ item, idx, products, onChange, onProductSelect, onRemove, can
     <tr>
       <td style={{ textAlign: "center", color: "#94a3b8" }}>{idx + 1}</td>
       <td>
+        <select
+          className="at-select-t"
+          value={item.branchId || "all"}
+          onChange={(e) => onChange(idx, "branchId", e.target.value === "all" ? "all" : Number(e.target.value))}
+        >
+          <option value="all">All Branch</option>
+          {[1, 2, 3].map((b) => (
+            <option key={b} value={b}>
+              {BRANCH_NAMES[b] || `Branch ${b}`}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {products.length > 0 && (
             <select className="at-select-t" value="" onChange={handleDropdown} style={{ fontSize: 12 }}>
               <option value="">— Select from catalog —</option>
-              {products.map((p) => (
+              {catalog.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.product_name}
                   {p.selling_price ? `  ₹${parseFloat(p.selling_price).toFixed(2)}` : ""}

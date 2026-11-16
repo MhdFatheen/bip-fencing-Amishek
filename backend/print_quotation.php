@@ -26,6 +26,7 @@ $discountAmt = $subtotal * $quote['discount_percent'] / 100;
 $taxable = $subtotal - $discountAmt;
 $taxAmt = $taxable * $quote['tax_percent'] / 100;
 $grandTotal = $taxable + $taxAmt;
+$isIgst = (($quote['gst_type'] ?? '') === 'igst');   // single IGST instead of CGST + SGST
 
 // Group items by HSN for tax summary
 $hsnGroups = [];
@@ -114,7 +115,11 @@ body{font-family:'Times New Roman',serif;font-size:11px;padding:10mm}
         <td class="text-center"><?php echo $it['unit']; ?></td><td class="text-center"><?php echo $it['quantity']; ?></td>
         <td class="text-right"><?php echo fmt($it['rate']); ?></td><td class="text-right"><?php echo fmt($it['amount']); ?></td></tr>
         <?php endforeach; ?>
+        <?php if($isIgst): ?>
+        <tr><td colspan="5" style="text-align:right"><strong>IGST Tax</strong></td><td></td><td></td><td class="text-right"><?php echo fmt($taxAmt); ?></td></tr>
+        <?php else: ?>
         <tr><td colspan="5" style="text-align:right"><strong>CGST Tax</strong><br><strong>SGST Tax</strong></td><td></td><td></td><td class="text-right"><?php echo fmt($taxAmt/2); ?><br><?php echo fmt($taxAmt/2); ?></td></tr>
+        <?php endif; ?>
         <tr style="background:#fef9f5"><td colspan="5" style="text-align:right"><strong>Total</strong></td><td class="text-center"><?php echo $totalQty; ?></td><td></td><td class="text-right"><strong><?php echo fmt($grandTotal); ?></strong></td></tr>
         </tbody>
     </table>
@@ -124,13 +129,27 @@ body{font-family:'Times New Roman',serif;font-size:11px;padding:10mm}
             <div class="amt-row"><span>Subtotal</span><span>₹<?php echo fmt($subtotal); ?></span></div>
             <?php if($discountAmt>0): ?><div class="amt-row"><span>Discount</span><span>-₹<?php echo fmt($discountAmt); ?></span></div><?php endif; ?>
             <div class="amt-row"><span>Taxable Value</span><span>₹<?php echo fmt($taxable); ?></span></div>
+            <?php if($isIgst): ?>
+            <div class="amt-row"><span>IGST (<?php echo $quote['tax_percent']+0; ?>%)</span><span>₹<?php echo fmt($taxAmt); ?></span></div>
+            <?php else: ?>
             <div class="amt-row"><span>CGST (<?php echo $quote['tax_percent']/2; ?>%)</span><span>₹<?php echo fmt($taxAmt/2); ?></span></div>
             <div class="amt-row"><span>SGST (<?php echo $quote['tax_percent']/2; ?>%)</span><span>₹<?php echo fmt($taxAmt/2); ?></span></div>
+            <?php endif; ?>
             <div class="grand-total-row"><span>Grand Total</span><span>₹<?php echo fmt($grandTotal); ?></span></div>
         </div>
     </div>
     <div style="border-bottom:1px solid #000; padding:8px 12px">
         <strong>Tax Amount (in words):</strong> INR <?php echo fmt($taxAmt); ?> Only
+        <?php if($isIgst): ?>
+        <table class="items-table" style="margin-top:8px"><thead><tr><th>HSN/SAC</th><th>Taxable Value</th><th>IGST Rate</th><th>IGST Amount</th><th>Total Tax</th></tr></thead>
+        <tbody><?php foreach($hsnGroups as $hsn=>$g): ?>
+        <tr><td class="center"><?php echo $hsn; ?></td><td class="text-right"><?php echo fmt($g['taxable']); ?></td>
+        <td class="center"><?php echo $quote['tax_percent']+0; ?>%</td><td class="text-right"><?php echo fmt($g['cgst']+$g['sgst']); ?></td>
+        <td class="text-right"><?php echo fmt($g['cgst']+$g['sgst']); ?></td></tr>
+        <?php endforeach; ?>
+        <tr style="font-weight:bold"><td>Total</td><td class="text-right"><?php echo fmt($taxable); ?></td><td></td><td class="text-right"><?php echo fmt($taxAmt); ?></td><td class="text-right"><?php echo fmt($taxAmt); ?></td></tr>
+        </tbody></table>
+        <?php else: ?>
         <table class="items-table" style="margin-top:8px"><thead><tr><th>HSN/SAC</th><th>Taxable Value</th><th>CGST Rate</th><th>CGST Amount</th><th>SGST Rate</th><th>SGST Amount</th><th>Total Tax</th></tr></thead>
         <tbody><?php foreach($hsnGroups as $hsn=>$g): ?>
         <tr><td class="center"><?php echo $hsn; ?></td><td class="text-right"><?php echo fmt($g['taxable']); ?></td>
@@ -140,6 +159,7 @@ body{font-family:'Times New Roman',serif;font-size:11px;padding:10mm}
         <?php endforeach; ?>
         <tr style="font-weight:bold"><td>Total</td><td class="text-right"><?php echo fmt($taxable); ?></td><td></td><td class="text-right"><?php echo fmt($taxAmt/2); ?></td><td></td><td class="text-right"><?php echo fmt($taxAmt/2); ?></td><td class="text-right"><?php echo fmt($taxAmt); ?></td></tr>
         </tbody></table>
+        <?php endif; ?>
     </div>
     <div class="bottom-section">
         <div class="notes-box"><strong>Terms & Notes</strong><br><?php echo nl2br($quote['notes']?:'No additional terms.'); ?><br><br>Declaration: <?php echo $quote['declaration']?:'We declare that this bill shows the actual price of the goods described and all particulars are true and correct.'; ?></div>

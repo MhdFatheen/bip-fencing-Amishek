@@ -89,6 +89,52 @@ const AdminFeatures = () => {
     );
   };
 
+  // ── Branch Spending (money given vs spent) ───────────────────
+  const ymd = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const [spFrom, setSpFrom] = useState(() => { const d = new Date(); return ymd(new Date(d.getFullYear(), d.getMonth(), 1)); });
+  const [spTo, setSpTo] = useState(() => ymd(new Date()));
+  const [spData, setSpData] = useState(null);
+  const [exp, setExp] = useState({ amount: "", expense_date: ymd(new Date()), purpose: "", note: "" });
+  const inrS = (v) => "₹" + Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  const loadSpending = async () => {
+    try {
+      const res = await apiFetch(`/admin/branch_spending.php?action=ledger&from=${spFrom}&to=${spTo}`);
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      setSpData(d);
+    } catch (err) {
+      showToast(err.message || "Could not load spending", "error");
+    }
+  };
+  const addExpense = async () => {
+    if (!(Number(exp.amount) > 0) || !exp.purpose.trim()) return showToast("Enter amount and what it was spent on", "error");
+    try {
+      const res = await apiFetch("/admin/branch_spending.php?action=add_expense", { method: "POST", body: JSON.stringify(exp) });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      showToast("Expense saved");
+      setExp((p) => ({ ...p, amount: "", purpose: "", note: "" }));
+      loadSpending();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+  const delExpense = async (id) => {
+    if (!window.confirm("Delete this expense?")) return;
+    try {
+      const res = await apiFetch(`/admin/branch_spending.php?action=delete_expense&id=${id}`, { method: "DELETE" });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      loadSpending();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+  useEffect(() => {
+    if (activeTab === "spending") loadSpending();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, spFrom, spTo]);
+
   useEffect(() => {
     const viewBranchId = localStorage.getItem("admin_view_branch");
     const viewBranchName = localStorage.getItem("admin_view_branch_name");
@@ -464,7 +510,102 @@ const AdminFeatures = () => {
           <span>Yearly Amount History</span>
           <span className="af-tab__badge">{yearlyHistory.length}</span>
         </button>
+        <button
+          type="button"
+          className={`af-tab${activeTab === "spending" ? " af-tab--active" : ""}`}
+          onClick={() => setActiveTab("spending")}
+        >
+          <i className="bi bi-wallet2"></i>
+          <span>Branch Spending</span>
+        </button>
       </div>
+
+      {activeTab === "spending" && (
+        <div className="af-card" style={{ padding: 20 }}>
+          <div className="af-no-print" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+            <b>From</b>
+            <input type="date" className="af-input" style={{ width: "auto" }} value={spFrom} onChange={(e) => setSpFrom(e.target.value)} />
+            <b>To</b>
+            <input type="date" className="af-input" style={{ width: "auto" }} value={spTo} onChange={(e) => setSpTo(e.target.value)} />
+            <button type="button" className="af-sp-btn" onClick={() => window.print()} style={{ marginLeft: "auto" }}>
+              <i className="bi bi-printer"></i> Print
+            </button>
+          </div>
+
+          <div id="af-spend-print">
+            <h3 style={{ margin: "0 0 10px" }}>
+              Branch Spending — {localStorage.getItem("admin_view_branch_name") || "All Branches"} ({spFrom} to {spTo})
+            </h3>
+            {spData && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 14 }}>
+                {[
+                  ["Opening balance", spData.opening, "#334155"],
+                  ["Given", spData.given, "#15803d"],
+                  ["Spent", spData.spent, "#dc2626"],
+                  ["Balance with branch", spData.balance, spData.balance < 0 ? "#dc2626" : "#15803d"],
+                ].map(([l, v, c]) => (
+                  <div key={l} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px" }}>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600 }}>{l}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: c }}>{inrS(v)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="af-no-print" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "6px 0 14px", paddingBottom: 14, borderBottom: "1px dashed #cbd5e1" }}>
+              <b>➕ Add Expense</b>
+              <input type="number" className="af-input" style={{ width: 130 }} placeholder="Amount" value={exp.amount}
+                onChange={(e) => setExp((p) => ({ ...p, amount: e.target.value }))} />
+              <input type="date" className="af-input" style={{ width: "auto" }} value={exp.expense_date}
+                onChange={(e) => setExp((p) => ({ ...p, expense_date: e.target.value }))} />
+              <input className="af-input" style={{ width: 200 }} placeholder="Spent on (diesel, food, rent…)" value={exp.purpose}
+                onChange={(e) => setExp((p) => ({ ...p, purpose: e.target.value }))} />
+              <input className="af-input" style={{ width: 200 }} placeholder="Note (optional)" value={exp.note}
+                onChange={(e) => setExp((p) => ({ ...p, note: e.target.value }))} />
+              <button type="button" className="af-sp-btn" onClick={addExpense}>Save</button>
+            </div>
+
+            <div className="af-table-wrap">
+              <table className="af-table">
+                <thead>
+                  <tr>
+                    <th>Date</th><th>Details</th>{!localStorage.getItem("admin_view_branch") && <th>Branch</th>}
+                    <th>Given</th><th>Spent</th><th>Balance</th><th className="af-no-print"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {spData && spData.opening !== 0 && (
+                    <tr><td>{spFrom}</td><td><i>Opening balance</i></td>{!localStorage.getItem("admin_view_branch") && <td></td>}<td></td><td></td><td><b>{inrS(spData.opening)}</b></td><td className="af-no-print"></td></tr>
+                  )}
+                  {(spData?.rows || []).map((r) => (
+                    <tr key={r.kind + r.id}>
+                      <td>{r.dt}</td>
+                      <td>
+                        {r.details}
+                        {r.note && <div style={{ fontSize: 11.5, color: "#64748b" }}>{r.note}</div>}
+                      </td>
+                      {!localStorage.getItem("admin_view_branch") && <td>{r.branch_name || "—"}</td>}
+                      <td style={{ color: "#15803d", fontWeight: 700 }}>{r.kind === "given" ? inrS(r.amount) : ""}</td>
+                      <td style={{ color: "#dc2626", fontWeight: 700 }}>{r.kind !== "given" ? inrS(r.amount) : ""}</td>
+                      <td><b>{inrS(r.balance)}</b></td>
+                      <td className="af-no-print">
+                        {r.kind === "expense" && role === "admin" && (
+                          <button className="af-act af-act--del" onClick={() => delExpense(r.id)} title="Delete">
+                            <i className="bi bi-trash-fill"></i>
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {spData && spData.rows.length === 0 && (
+                    <tr><td colSpan={7} style={{ textAlign: "center", padding: 18, color: "#94a3b8" }}>Nothing in this period</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TAB 1: Branch Amount Records */}
       {activeTab === "records" && (
@@ -592,6 +733,7 @@ const AdminFeatures = () => {
                             )}
                           </td>
                           <td>
+                            {role === "admin" ? (
                             <div className="af-actions">
                               <button
                                 className="af-act af-act--edit"
@@ -608,6 +750,9 @@ const AdminFeatures = () => {
                                 <i className="bi bi-trash-fill"></i>
                               </button>
                             </div>
+                            ) : (
+                              <span className="af-nil">—</span>
+                            )}
                           </td>
                         </tr>
                       ))
@@ -680,7 +825,7 @@ const AdminFeatures = () => {
           {!isBranchSelected && role === "admin" && (
             <div className="af-alert">
               <i className="bi bi-exclamation-triangle-fill"></i>
-              Please select a specific branch (Kadambankulam, Nanguneri or Kadambankulam) from the
+              Please select a specific branch (Kadambankulam, Fencing Group or Panagudi) from the
               topbar to add an amount.
             </div>
           )}
@@ -980,6 +1125,13 @@ const AdminFeatures = () => {
         .af-alert { display: flex; align-items: center; gap: 10px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 8px; padding: 12px 16px; font-size: 14px; font-weight: 500; margin-bottom: 24px; }
 
         /* NEW: Tabs — Employee-page style (icon + label, green underline on active, badge count) */
+        .af-sp-btn { display: inline-flex; gap: 6px; align-items: center; padding: 8px 16px; border: none; border-radius: 8px; background: #16a34a; color: #fff; font-weight: 700; cursor: pointer; }
+        @media print {
+          body * { visibility: hidden !important; }
+          #af-spend-print, #af-spend-print * { visibility: visible !important; }
+          #af-spend-print { position: absolute; top: 0; left: 0; width: 100%; }
+          .af-no-print { display: none !important; }
+        }
         .af-tabs { display: flex; align-items: center; gap: 32px; border-bottom: 1.5px solid #e2e8f0; margin-bottom: 24px; overflow-x: auto; }
         .af-tab { display: inline-flex; align-items: center; gap: 8px; background: none; border: none; padding: 14px 2px; font-size: 14.5px; font-weight: 700; color: #94a3b8; cursor: pointer; position: relative; white-space: nowrap; transition: color .15s; }
         .af-tab i { font-size: 16px; color: #cbd5e1; transition: color .15s; }

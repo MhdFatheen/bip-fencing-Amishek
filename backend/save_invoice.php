@@ -20,9 +20,9 @@ if (isset($_GET['next_no'])) {
     exit;
 }
 
-if (!in_array($_SERVER['REQUEST_METHOD'], ['POST', 'PUT'], true)) {
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode(['success' => false, 'message' => 'Method not allowed (' . $_SERVER['REQUEST_METHOD'] . ')']);
+    echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     exit;
 }
 
@@ -33,9 +33,9 @@ if (!$data) {
     exit;
 }
 
-if (empty($data['invoice_no']) || empty($data['invoice_date']) || empty($data['buyer_name'])) {
+if (empty($data['invoice_no']) || empty($data['invoice_date'])) {   // customer is optional
     http_response_code(422);
-    echo json_encode(['success' => false, 'message' => 'invoice_no, invoice_date and buyer_name are required']);
+    echo json_encode(['success' => false, 'message' => 'invoice_no and invoice_date are required']);
     exit;
 }
 if (empty($data['items']) || !is_array($data['items'])) {
@@ -73,7 +73,11 @@ $d = fn($k) => !empty($data[$k]) ? $data[$k] : null;
 // ── Collect all values ────────────────────────────────────────
 $copy_type            = $s('copy_type');
 $payment_mode         = $s('payment_mode');
-$gst_rate             = $f('gst_rate') ?: 18;
+if ($payment_mode === '' || $payment_mode === null) $payment_mode = 'Credit';   // no mode chosen = same as before
+// 0 = Non-GST bill; nothing sent = 18 as before
+// CGST + SGST (default, as before) or a single IGST
+$gst_type             = (($data['gst_type'] ?? '') === 'igst') ? 'igst' : 'cgst_sgst';
+$gst_rate             = (isset($data['gst_rate']) && $data['gst_rate'] !== '' && is_numeric($data['gst_rate'])) ? floatval($data['gst_rate']) : 18.0;
 $invoice_no           = $s('invoice_no');
 $invoice_date         = $data['invoice_date'];
 $reference_no         = $s('reference_no');
@@ -91,7 +95,7 @@ $consignee_name       = $s('consignee_name');
 $consignee_address    = $s('consignee_address');
 $consignee_state      = $s('consignee_state');
 $consignee_state_code = $s('consignee_state_code');
-$buyer_name           = $s('buyer_name');
+$buyer_name           = $s('buyer_name') ?? '';   // may be empty (invoice without a customer)
 $buyer_address        = $s('buyer_address');
 $buyer_phone          = $s('buyer_phone');
 $buyer_gst            = $s('buyer_gst');
@@ -106,7 +110,7 @@ $total_tax            = $f('total_tax');
 $round_off            = $f('round_off');
 $net_amount           = $f('net_amount');
 $open_balance         = $f('open_balance');
-$paid_amount          = $f('paid_amount');   // Balance Tracking → Paid Amount
+$paid_amount          = max(0, $f('paid_amount'));   // Balance Tracking → Amount received (never negative)
 $closing_balance      = $f('closing_balance');
 $bank_holder_name     = $s('bank_holder_name');
 $bank_name            = $s('bank_name');
@@ -121,6 +125,30 @@ $itemsHaveBranch = (bool) $conn->query("SHOW COLUMNS FROM invoice_items LIKE 'br
 $paidCol = $conn->query("SHOW COLUMNS FROM invoices LIKE 'paid_amount'");
 if ($paidCol && $paidCol->num_rows === 0) {
     $conn->query("ALTER TABLE invoices ADD COLUMN paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00");
+}
+
+// GST type (CGST+SGST / IGST) – column added once
+$gtCol = $conn->query("SHOW COLUMNS FROM invoices LIKE 'gst_type'");
+if ($gtCol && $gtCol->num_rows === 0) {
+    $conn->query("ALTER TABLE invoices ADD COLUMN gst_type VARCHAR(10) NOT NULL DEFAULT 'cgst_sgst'");
+}
+
+// Bill To (buyer name) is mandatory. Consignee (Ship To) stays optional.
+// Older invoices that were saved without a Bill To can still be re-saved as they are.
+if (trim($buyer_name) === '') {
+    $legacyBlank = false;
+    $lg = $conn->prepare("SELECT COALESCE(buyer_name, '') AS bn FROM invoices WHERE invoice_no = ?");
+    $lg->bind_param('s', $invoice_no);
+    $lg->execute();
+    $lgRow = $lg->get_result()->fetch_assoc();
+    $lg->close();
+    if ($lgRow && trim($lgRow['bn']) === '') $legacyBlank = true;
+    if (!$legacyBlank) {
+        http_response_code(422);
+        echo json_encode(['success' => false, 'message' => 'Bill To (buyer name) is required']);
+        $conn->close();
+        exit;
+    }
 }
 
 $conn->begin_transaction();
@@ -139,7 +167,7 @@ try {
     // Customer branch = topbar branch (admin), else the bill's branch
     $viewBranch  = ($authUser['role'] === 'admin' && !empty($data['view_branch'])) ? (int) $data['view_branch'] : null;
     $cBranch     = $fromAll ? null : ($viewBranch ?: $branch_id);
-    if ($buyer_phone) {
+    if ($buyer_phone && $buyer_name !== '') {   // no name = no customer record is created
         // Match by phone within this branch, or an older row with no branch
         if ($cBranch === null) {
             $cChk = $conn->prepare("SELECT id FROM clients WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10) = ? ORDER BY id ASC LIMIT 1");
@@ -280,6 +308,12 @@ try {
     $pStmt->bind_param('di', $paid_amount, $invoice_id);
     $pStmt->execute();
     $pStmt->close();
+
+    // GST type (kept separate so the main INSERT/UPDATE above stays untouched)
+    $gStmt = $conn->prepare("UPDATE invoices SET gst_type = ? WHERE id = ?");
+    $gStmt->bind_param('si', $gst_type, $invoice_id);
+    $gStmt->execute();
+    $gStmt->close();
 
     // ── Step 3: Insert line items ────────────────────────────
     if ($itemsHaveBranch) {

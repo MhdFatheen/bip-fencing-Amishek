@@ -96,6 +96,38 @@ function ensureCustomerColumns(mysqli $conn): void {
 }
 ensureCustomerColumns($conn);
 
+// Payments: each client_payments row can belong to ONE invoice (invoice_id) and
+// carries its payment mode. invoices.paid_amount = amount received when the
+// invoice was created (initial payment); later payments are client_payments rows.
+function ensurePaymentColumns(mysqli $conn): void {
+    $cols = [
+        'client_payments' => ['invoice_id' => "INT UNSIGNED NULL DEFAULT NULL", 'payment_mode' => "VARCHAR(30) NULL DEFAULT NULL"],
+        'invoices'        => ['paid_amount' => "DECIMAL(12,2) NOT NULL DEFAULT 0.00"],
+    ];
+    foreach ($cols as $table => $defs) {
+        foreach ($defs as $col => $def) {
+            $res = $conn->query("SHOW COLUMNS FROM `$table` LIKE '$col'");
+            if ($res && $res->num_rows === 0) {
+                $conn->query("ALTER TABLE `$table` ADD COLUMN $col $def");
+            }
+        }
+    }
+}
+ensurePaymentColumns($conn);
+
+// invoices.gst_type ('cgst_sgst' | 'igst') – column added once
+$__gt = $conn->query("SHOW COLUMNS FROM invoices LIKE 'gst_type'");
+if ($__gt && $__gt->num_rows === 0) {
+    $conn->query("ALTER TABLE invoices ADD COLUMN gst_type VARCHAR(10) NOT NULL DEFAULT 'cgst_sgst'");
+}
+
+// Paid / balance / status of one invoice (initial payment + later payments)
+function invoicePaymentInfo(float $net, float $initial, float $later): array {
+    $paid = round($initial + $later, 2);
+    $bal  = round(max($net - $paid, 0), 2);
+    $status = $paid <= 0 ? 'Unpaid' : ($paid + 0.004 >= $net ? 'Fully Paid' : 'Partially Paid');
+    return ['paid_total' => $paid, 'later_paid' => round($later, 2), 'balance_due' => $bal, 'payment_status' => $status];
+}
 // Bills of a DELETED customer are marked "detached" so a new customer
 // with the same phone/name starts from 0 (bills stay in Sales/Purchase lists).
 foreach (['invoices', 'purchase_bills'] as $t) {
@@ -140,12 +172,123 @@ function customerWithFallbacks(mysqli $conn, array $c): array {
     return $c;
 }
 
+// ── Sales return: POST ?return_invoice=ID  {items:[{id, return_qty}]} ──
+//    Item qty becomes original − returned; bill totals + balance recalculated.
+foreach (['orig_qty' => 'DOUBLE NULL DEFAULT NULL', 'return_qty' => 'DOUBLE NOT NULL DEFAULT 0'] as $col => $def) {
+    $r = $conn->query("SHOW COLUMNS FROM invoice_items LIKE '$col'");
+    if ($r && $r->num_rows === 0) $conn->query("ALTER TABLE invoice_items ADD COLUMN $col $def");
+}
+if ($method === 'POST' && !empty($_GET['return_invoice'])) {
+    if ($authUser['role'] !== 'admin') { http_response_code(403); echo json_encode(['success' => false, 'message' => 'Admin only']); exit; }
+    $iid  = (int) $_GET['return_invoice'];
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $inv  = $conn->query("SELECT * FROM invoices WHERE id = $iid")->fetch_assoc();
+    if (!$inv) { http_response_code(404); echo json_encode(['success' => false, 'message' => 'Bill not found']); exit; }
+    $conn->begin_transaction();
+    try {
+        $u = $conn->prepare("UPDATE invoice_items SET orig_qty = ?, return_qty = ?, qty = ?, taxable_amt = ? WHERE id = ? AND invoice_id = ?");
+        foreach (($body['items'] ?? []) as $it) {
+            $id  = (int) ($it['id'] ?? 0);
+            $row = $conn->query("SELECT * FROM invoice_items WHERE id = $id AND invoice_id = $iid")->fetch_assoc();
+            if (!$row) continue;
+            $orig = $row['orig_qty'] !== null ? (float) $row['orig_qty'] : (float) $row['qty'];
+            $ret  = max(0, min($orig, (float) ($it['return_qty'] ?? 0)));
+            $qty  = $orig - $ret;
+            $tax  = round($qty * (float) $row['rate_excl'], 2);
+            $u->bind_param('dddiii', $orig, $ret, $qty, $tax, $id, $iid);
+            $u->execute();
+        }
+        $u->close();
+        $sub  = (float) $conn->query("SELECT COALESCE(SUM(taxable_amt),0) s FROM invoice_items WHERE invoice_id = $iid")->fetch_assoc()['s'];
+        if (($inv['gst_type'] ?? '') === 'igst') {   // single IGST: no CGST / SGST split
+            $cg = 0.0; $sg = 0.0;
+            $tt = round($sub * (float) $inv['gst_rate'] / 100, 2);
+        } else {
+            $cg   = round($sub * (float) $inv['cgst_rate'] / 100, 2);
+            $sg   = round($sub * (float) $inv['sgst_rate'] / 100, 2);
+            $tt   = $cg + $sg;
+        }
+        $net  = round($sub + $tt);
+        $ro   = round($net - ($sub + $tt), 2);
+        $close = (float) $inv['closing_balance'] + ($net - (float) $inv['net_amount']);
+        $v = $conn->prepare("UPDATE invoices SET subtotal=?, cgst_amount=?, sgst_amount=?, total_tax=?, round_off=?, net_amount=?, closing_balance=? WHERE id=?");
+        $v->bind_param('dddddddi', $sub, $cg, $sg, $tt, $ro, $net, $close, $iid);
+        $v->execute(); $v->close();
+        $conn->commit();
+    } catch (Throwable $e) {
+        $conn->rollback();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Return failed: ' . $e->getMessage()]);
+        exit;
+    }
+    echo json_encode(['success' => true, 'net_amount' => $net]);
+    exit;
+}
+
 switch ($method) {
 
     // ----------------------------------------------------------
     //  GET
     // ----------------------------------------------------------
     case 'GET':
+
+        // ── Vehicle trips: bills that have this vehicle number ──
+        if (isset($_GET['vehicle'])) {
+            $v = strtoupper(preg_replace('/[\s\-.]/', '', (string) $_GET['vehicle']));
+            if (strlen($v) < 3) { echo json_encode(['success' => true, 'trips' => []]); exit; }
+            $like = '%' . $v . '%';
+            $sql = "SELECT id, invoice_no, invoice_date, buyer_name, consignee_name, consignee_address,
+                           destination, net_amount, motor_vehicle_no
+                      FROM invoices
+                     WHERE UPPER(REPLACE(REPLACE(REPLACE(COALESCE(motor_vehicle_no,''),' ',''),'-',''),'.','')) LIKE ?";
+            $types = 's'; $params = [$like];
+            // all branches: a bill's branch is the product's stock branch, not always the topbar branch
+            $sql .= " ORDER BY invoice_date DESC, id DESC LIMIT 200";
+            $st = $conn->prepare($sql);
+            $st->bind_param($types, ...$params);
+            $st->execute();
+            $trips = $st->get_result()->fetch_all(MYSQLI_ASSOC);
+            $st->close();
+            echo json_encode(['success' => true, 'trips' => $trips]);
+            exit;
+        }
+
+        // ── Invoices that belong to NO registered customer (GST / Non-GST) ──
+        //    client_id empty AND no customer with the same phone (or the customer was
+        //    deleted). Nothing is created for them; they are only listed.
+        if (isset($_GET['loose_invoices'])) {
+            $np = fn($col) => "RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE($col,''),' ',''),'-',''),'+',''),'(',''),')',''),'.',''),'/',''), 10)";
+            $sql = "SELECT i.id, i.invoice_no, i.invoice_date, i.buyer_name, i.buyer_phone, i.gst_rate, i.subtotal,
+                           i.cgst_rate, i.cgst_amount, i.sgst_rate, i.sgst_amount, i.total_tax, i.round_off, i.gst_type,
+                           i.net_amount, i.paid_amount, i.payment_mode, i.branch_id, b.name AS branch_name
+                      FROM invoices i
+                      LEFT JOIN branches b ON b.id = i.branch_id
+                     WHERE i.client_id IS NULL
+                       AND NOT (COALESCE(i.client_detached,0) = 0 AND {$np('i.buyer_phone')} <> ''
+                                AND EXISTS (SELECT 1 FROM clients c WHERE CONVERT({$np('c.phone')} USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                                                                       = CONVERT({$np('i.buyer_phone')} USING utf8mb4) COLLATE utf8mb4_unicode_ci))";
+            if ($branch_id !== null) $sql .= " AND (i.branch_id = ? OR i.branch_id IS NULL)";
+            $sql .= " ORDER BY i.invoice_date DESC, i.id DESC";
+            $st = $conn->prepare($sql);
+            if ($branch_id !== null) $st->bind_param('i', $branch_id);
+            $st->execute();
+            $rows = $st->get_result()->fetch_all(MYSQLI_ASSOC);
+            $st->close();
+            $byId = [];
+            foreach ($rows as $k => $r) { $byId[(int) $r['id']] = $k; $rows[$k]['items'] = []; }
+            if ($byId) {
+                $ids = implode(',', array_keys($byId));
+                $ir = $conn->query("SELECT invoice_id, description, hsn, qty, per FROM invoice_items WHERE invoice_id IN ($ids) ORDER BY id ASC");
+                while ($it = $ir->fetch_assoc()) $rows[$byId[(int) $it['invoice_id']]]['items'][] = $it;
+            }
+            foreach ($rows as &$r) {
+                $r['is_gst']      = (float) $r['gst_rate'] > 0 || (float) $r['total_tax'] > 0;
+                $r['outstanding'] = round(max((float) $r['net_amount'] - (float) $r['paid_amount'], 0), 2);
+            }
+            unset($r);
+            echo json_encode(['success' => true, 'invoices' => $rows]);
+            exit;
+        }
 
         // ── Single invoice with items ─────────────────────────
         // ── Look up ONE customer by phone (autofill everywhere) ──
@@ -204,7 +347,7 @@ switch ($method) {
 
             // ---- SECTION 1: SALES ---------------------------
             $invStmt = $conn->prepare("
-                SELECT id, invoice_no, invoice_date, net_amount, payment_mode
+                SELECT id, invoice_no, invoice_date, net_amount, payment_mode, motor_vehicle_no, paid_amount
                   FROM invoices
                  WHERE client_id = ?
                     OR (client_id IS NULL AND COALESCE(client_detached,0) = 0 AND ? <> ''
@@ -226,6 +369,32 @@ switch ($method) {
             $pStmt->execute();
             $payments = $pStmt->get_result()->fetch_all(MYSQLI_ASSOC);
             $pStmt->close();
+
+            // Payment status per invoice + the invoice's initial payments shown as transactions
+            $laterByInv = [];
+            foreach ($payments as $p) {
+                if (!empty($p['invoice_id']) && (float) $p['amount'] > 0) {
+                    $laterByInv[(int) $p['invoice_id']] = ($laterByInv[(int) $p['invoice_id']] ?? 0) + (float) $p['amount'];
+                }
+            }
+            $initialPaid = 0.0;
+            foreach ($invoices as &$ivr) {
+                $ini = (float) ($ivr['paid_amount'] ?? 0);
+                $initialPaid += $ini;
+                $ivr = array_merge($ivr, invoicePaymentInfo((float) $ivr['net_amount'], $ini, $laterByInv[(int) $ivr['id']] ?? 0));
+                if ($ini > 0) {
+                    $payments[] = [
+                        'id' => 'inv-' . $ivr['id'], 'client_id' => $client_id, 'amount' => $ini,
+                        'note' => trim(($ivr['payment_mode'] ?: 'Paid') . ' · received with invoice ' . $ivr['invoice_no']),
+                        'payment_date' => $ivr['invoice_date'], 'invoice_id' => (int) $ivr['id'],
+                        'payment_mode' => $ivr['payment_mode'], 'from_invoice' => 1,
+                    ];
+                }
+            }
+            unset($ivr);
+            usort($payments, function ($a, $b) {
+                return [(string) $b['payment_date'], (string) $b['id']] <=> [(string) $a['payment_date'], (string) $a['id']];
+            });
 
             $total_billed = (float) array_sum(array_column($invoices, 'net_amount'));
             $total_paid   = (float) array_sum(array_column($payments, 'amount'));
@@ -311,10 +480,10 @@ switch ($method) {
                    MAX(i.invoice_date)  AS last_invoice_date,
                    MAX(i.invoice_no)    AS last_invoice_no,
                    COALESCE(SUM(i.net_amount), 0) AS total_billed,
-                   COALESCE((
+                   (COALESCE((
                        SELECT SUM(p.amount) FROM client_payments p
                         WHERE p.client_id = c.id
-                   ), 0) AS total_paid
+                   ), 0) + COALESCE(SUM(i.paid_amount), 0)) AS total_paid
               FROM clients c
               LEFT JOIN invoices i
                      ON i.client_id = c.id
@@ -601,12 +770,41 @@ switch ($method) {
         $amount       = (float) $data['amount'];
         $note         = trim($data['note'] ?? '');
         $payment_date = $data['payment_date'];
+        $mode         = trim((string) ($data['payment_mode'] ?? ''));
+        if ($mode === '') $mode = trim(explode('·', $note)[0] ?? '');   // "GPay · Collected by X" -> GPay
+        $mode         = $mode === '' ? null : substr($mode, 0, 30);
+        $invoice_id   = !empty($data['invoice_id']) ? (int) $data['invoice_id'] : null;
+
+        // Payment against ONE invoice: must not be more than what is still due on it
+        if ($invoice_id !== null && $amount > 0) {
+            $iq = $conn->prepare("SELECT net_amount, paid_amount, invoice_no FROM invoices WHERE id = ?");
+            $iq->bind_param('i', $invoice_id);
+            $iq->execute();
+            $invRow = $iq->get_result()->fetch_assoc();
+            $iq->close();
+            if (!$invRow) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Invoice not found']);
+                exit;
+            }
+            $sq = $conn->prepare("SELECT COALESCE(SUM(amount),0) AS s FROM client_payments WHERE invoice_id = ? AND amount > 0");
+            $sq->bind_param('i', $invoice_id);
+            $sq->execute();
+            $laterSum = (float) $sq->get_result()->fetch_assoc()['s'];
+            $sq->close();
+            $due = round((float) $invRow['net_amount'] - (float) $invRow['paid_amount'] - $laterSum, 2);
+            if ($amount > $due + 0.004) {
+                http_response_code(422);
+                echo json_encode(['success' => false, 'message' => "Invoice {$invRow['invoice_no']} has only ₹" . number_format(max($due, 0), 2) . " balance — amount is more than that"]);
+                exit;
+            }
+        }
 
         $stmt = $conn->prepare("
-            INSERT INTO client_payments (client_id, amount, note, payment_date, branch_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO client_payments (client_id, amount, note, payment_date, branch_id, invoice_id, payment_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ");
-        $stmt->bind_param('idssi', $client_id, $amount, $note, $payment_date, $branch_id);
+        $stmt->bind_param('idssiis', $client_id, $amount, $note, $payment_date, $branch_id, $invoice_id, $mode);
 
         if (!$stmt->execute()) {
             http_response_code(500);

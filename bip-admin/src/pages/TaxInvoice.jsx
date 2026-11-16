@@ -127,9 +127,10 @@ const toISO = (txt) => {
 // The row's branchId is ALL_BRANCH; the product's own branch is kept in
 // productBranchId (used only for stock deduction). Saved as branch_id = NULL.
 const ALL_BRANCH = "all";
-// Purchase Catalog products use a separate ID namespace to avoid collisions with Product Catalog IDs.
-const PURCHASE_PREFIX = "pc_";
-const isPurchaseId = (id) => String(id ?? "").startsWith(PURCHASE_PREFIX);
+// Products bought through Purchase Bill WITH an HSN Code are also sellable here.
+// Their ids are prefixed so they never collide with Product Catalog ids.
+const PB_PREFIX = "pb_";
+const isPurchaseBillId = (id) => String(id ?? "").startsWith(PB_PREFIX);
 const stockBranchOf = (p) =>
   p.branchId === ALL_BRANCH ? p.productBranchId : p.branchId;
 
@@ -190,7 +191,7 @@ const DEFAULT_FORM = {
   motorVehicleNo: "",
   ewayRequired: "",
   ewayNumber: "",
-  paymentMode: "Credit",
+  paymentMode: "", // nothing selected by default ("Select Payment Mode"); saved as Credit if left empty
   consigneeName: "",
   consigneeAddress: "",
   consigneeState: "Tamil Nadu",
@@ -206,6 +207,7 @@ const DEFAULT_FORM = {
   closingBalance: "",
   roundOffManual: "",
   gstRate: 18,
+  gstType: "cgst_sgst", // "cgst_sgst" | "igst"
   bankHolderName: DEFAULT_BANK.holderName,
   bankName: DEFAULT_BANK.bankName,
   bankAccountNo: DEFAULT_BANK.accountNo,
@@ -247,7 +249,11 @@ const mapInvoiceToForm = (inv) => ({
   openBalance: inv.open_balance != null ? String(inv.open_balance) : "",
   paidAmount: inv.paid_amount != null ? String(inv.paid_amount) : "",
   closingBalance: inv.closing_balance != null ? String(inv.closing_balance) : "",
-  gstRate: inv.gst_rate ? Number(inv.gst_rate) : DEFAULT_FORM.gstRate,
+  gstRate:
+    inv.gst_rate !== null && inv.gst_rate !== undefined && inv.gst_rate !== ""
+      ? Number(inv.gst_rate)
+      : DEFAULT_FORM.gstRate,
+  gstType: inv.gst_type === "igst" ? "igst" : "cgst_sgst",
   bankHolderName: inv.bank_holder_name || DEFAULT_BANK.holderName,
   bankName: inv.bank_name || DEFAULT_BANK.bankName,
   bankAccountNo: inv.bank_account_no || DEFAULT_BANK.accountNo,
@@ -293,6 +299,7 @@ const mapQuotationToForm = (q) => ({
         ? Number(q.tax_percent)
         : DEFAULT_FORM.gstRate
       : DEFAULT_FORM.gstRate,
+  gstType: q.gst_type === "igst" ? "igst" : "cgst_sgst",
 });
 
 const mapQuotationItemsToProducts = (items) =>
@@ -730,13 +737,15 @@ export default function TaxInvoice() {
       const res = await apiFetch("/products.php", { branchId });
       if (!res.ok) return;
       const data = await res.json();
-      // Include in-stock Purchase Catalog products, without duplicating Product Catalog names.
+      // Purchase Bill products that have an HSN Code (others stay purchase-only)
       let purchased = [];
       try {
-        const pr = await apiFetch("/purchase_products.php", { branchId });
-        if (pr.ok) purchased = await pr.json();
+        const pr = await apiFetch("/purchase_invoice_products.php", { branchId });
+        if (pr.ok) {
+          const pj = await pr.json();
+          if (Array.isArray(pj)) purchased = pj;
+        }
       } catch (_) {}
-      const ownNames = new Set(data.map((p) => String(p.product_name).trim().toLowerCase()));
       setProductsByBranch((prev) => ({
         ...prev,
         [branchId]: [
@@ -752,20 +761,18 @@ export default function TaxInvoice() {
             description: p.description,
             _raw: p,
           })),
-          ...(Array.isArray(purchased) ? purchased : [])
-            .filter((p) => Number(p.stock_qty) > 0 && !ownNames.has(String(p.product_name).trim().toLowerCase()))
-            .map((p) => ({
-              id: PURCHASE_PREFIX + p.id,
-              productName: p.product_name,
-              hsn: p.hsn,
-              category: p.category,
-              unit: p.unit,
-              sellingPrice: p.selling_price,
-              stockQty: p.stock_qty,
-              minStock: p.min_stock,
-              description: p.description,
-              isPurchase: true,
-            })),
+          ...purchased.map((p) => ({
+            id: PB_PREFIX + p.product_id,
+            productName: p.product_name,
+            hsn: p.hsn,
+            category: "",
+            unit: "Pcs",
+            sellingPrice: p.rate,
+            stockQty: p.current_stock,
+            minStock: 0,
+            description: "",
+            isPurchaseBill: true,
+          })),
         ],
       }));
     } catch (_) {}
@@ -971,7 +978,8 @@ export default function TaxInvoice() {
     const e = {};
     if (!form.invoiceNo.trim()) e.invoiceNo = "Required";
     if (!form.invoiceDate) e.invoiceDate = "Required";
-    if (!form.buyerName.trim()) e.buyerName = "Required";
+    // Bill To is mandatory; Consignee (Ship To) is optional
+    if (!form.buyerName.trim()) e.buyerName = "Bill To is required";
     products.forEach((p, i) => {
       if (!p.branchId) e[`branch_${i}`] = "Required";
       if (!p.desc.trim()) e[`desc_${i}`] = "Required";
@@ -982,9 +990,13 @@ export default function TaxInvoice() {
     return e;
   };
 
-  const gstRate = parseFloat(form.gstRate) || 18;
-  const cgstRate = gstRate / 2;
-  const sgstRate = gstRate / 2;
+  const gstRateNum = parseFloat(form.gstRate);
+  const gstRate = isNaN(gstRateNum) ? 18 : gstRateNum; // 0 = Non-GST bill
+  const isNonGst = gstRate === 0;
+  const isIgst = !isNonGst && form.gstType === "igst"; // single IGST instead of CGST + SGST
+  const cgstRate = isIgst ? 0 : gstRate / 2;
+  const sgstRate = isIgst ? 0 : gstRate / 2;
+  const igstRate = isIgst ? gstRate : 0;
 
   const rows = products.map((p) => {
     const qty = parseFloat(p.qty) || 0;
@@ -1000,7 +1012,8 @@ export default function TaxInvoice() {
   const subtotal = r2(rows.reduce((s, r) => s + r2(r.taxableAmt), 0));
   const cgstAmt = r2(subtotal * (cgstRate / 100));
   const sgstAmt = r2(subtotal * (sgstRate / 100));
-  const totalTax = r2(cgstAmt + sgstAmt);
+  const igstAmt = r2(subtotal * (igstRate / 100));
+  const totalTax = r2(cgstAmt + sgstAmt + igstAmt);
   const gross = r2(subtotal + totalTax);
   const autoRoundOff = r2(Math.round(gross) - gross);
   const roundOff =
@@ -1021,13 +1034,24 @@ export default function TaxInvoice() {
     closing: Math.max(closingBalance, 0),          // still to pay
   };
 
+  // Payment status of THIS invoice: only the amount actually received counts
+  // (choosing Cash / UPI / … never marks it paid by itself)
+  const invRemaining = Math.max(r2(netAmount - paidAmount), 0);
+  const payStatus =
+    netAmount > 0 && paidAmount + 0.004 >= netAmount
+      ? { label: "Fully Paid", color: "#15803d", bg: "#dcfce7" }
+      : paidAmount > 0
+        ? { label: "Partially Paid", color: "#b45309", bg: "#fef3c7" }
+        : { label: "Unpaid", color: "#b91c1c", bg: "#fee2e2" };
+
   const hsnGroups = {};
   rows.forEach((r) => {
     const key = r.hsn || "–";
-    if (!hsnGroups[key]) hsnGroups[key] = { taxableValue: 0, cgst: 0, sgst: 0 };
+    if (!hsnGroups[key]) hsnGroups[key] = { taxableValue: 0, cgst: 0, sgst: 0, igst: 0 };
     hsnGroups[key].taxableValue += r.taxableAmt;
     hsnGroups[key].cgst += r.taxableAmt * (cgstRate / 100);
     hsnGroups[key].sgst += r.taxableAmt * (sgstRate / 100);
+    hsnGroups[key].igst += r.taxableAmt * (igstRate / 100);
   });
 
   const reduceStock = async () => {
@@ -1059,15 +1083,16 @@ export default function TaxInvoice() {
       for (const idx of pendingIndexes) {
         const invoiceItem = products[idx];
         const usedQty = parseFloat(invoiceItem.qty);
-        if (isPurchaseId(invoiceItem.productId)) {
-          const dRes = await apiFetch(
-            `/purchase_products.php?action=sale-deduct&id=${String(invoiceItem.productId).slice(PURCHASE_PREFIX.length)}`,
-            {
-              method: "POST",
-              branchId: stockBranchOf(invoiceItem),
-              body: JSON.stringify({ qty: usedQty, branch_id: stockBranchOf(invoiceItem) }),
-            },
-          );
+        if (isPurchaseBillId(invoiceItem.productId)) {
+          const dRes = await apiFetch("/purchase_invoice_products.php?action=sale-deduct", {
+            method: "POST",
+            branchId: stockBranchOf(invoiceItem),
+            body: JSON.stringify({
+              product_id: String(invoiceItem.productId).slice(PB_PREFIX.length),
+              qty: usedQty,
+              branch_id: stockBranchOf(invoiceItem),
+            }),
+          });
           const dData = await dRes.json().catch(() => ({}));
           if (!dRes.ok) {
             alert(`⚠️ ${dData.error || "Stock update failed"}`);
@@ -1178,8 +1203,9 @@ export default function TaxInvoice() {
         invoice_no: invoiceNoToUse,
         invoice_date: form.invoiceDate,
         copy_type: form.copyType,
-        payment_mode: form.paymentMode,
+        payment_mode: form.paymentMode || "Credit", // no mode chosen = Credit, as before
         gst_rate: gstRate,
+        gst_type: isIgst ? "igst" : "cgst_sgst",
         reference_no: form.referenceNo,
         buyers_order_no: form.buyersOrderNo,
         dated: form.dated,
@@ -1471,11 +1497,28 @@ export default function TaxInvoice() {
                   <option value={12}>12% (CGST 6% + SGST 6%)</option>
                   <option value={5}>5% (CGST 2.5% + SGST 2.5%)</option>
                   <option value={28}>28% (CGST 14% + SGST 14%)</option>
+                  <option value={0}>No GST (Non-GST bill)</option>
                 </select>
               </div>
+              {!isNonGst && (
+                <div className="at-fg">
+                  <label className="at-label">GST Type</label>
+                  <select className="at-select" name="gstType" value={form.gstType} onChange={handleForm}>
+                    <option value="cgst_sgst">CGST + SGST</option>
+                    <option value="igst">IGST</option>
+                  </select>
+                </div>
+              )}
               <div className="at-fg">
                 <label className="at-label">Payment Mode</label>
-                <select className="at-select" name="paymentMode" value={form.paymentMode} onChange={handleForm}>
+                <select
+                  className="at-select"
+                  name="paymentMode"
+                  value={form.paymentMode}
+                  onChange={handleForm}
+                  style={!form.paymentMode ? { color: "#94a3b8" } : undefined}
+                >
+                  <option value="">Select Payment Mode</option>
                   {["Cash", "Credit", "UPI", "Bank Transfer", "Cheque"].map((m) => (
                     <option key={m}>{m}</option>
                   ))}
@@ -1593,12 +1636,12 @@ export default function TaxInvoice() {
           <div className="at-card">
             <div className="at-card__head">
               <i className="bi bi-person-badge"></i>
-              <span>Buyer (Bill To) *</span>
+              <span>Buyer (Bill To)</span>
             </div>
             <div className="at-form-grid">
               <div className="at-fg at-fg--span2">
                 <label className="at-label">
-                  Name <span className="req">*</span>
+                  Name <span style={{ color: "#dc2626" }}>*</span>
                 </label>
                 <ClientNameInput
                   className={`at-input${errors.buyerName ? " error-field" : ""}`}
@@ -1762,15 +1805,6 @@ export default function TaxInvoice() {
                           optionValue: sp.id,
                           label: sp.productName,
                         }));
-                    const pickerGroups = [
-                      { label: "Product Catalog", options: branchProducts.filter((sp) => !sp.isPurchase) },
-                      { label: "Purchase Catalog", options: branchProducts.filter((sp) => sp.isPurchase) },
-                    ]
-                      .filter((g) => g.options.length)
-                      .map((g) => ({
-                        label: g.label,
-                        options: g.options.map((sp) => ({ value: String(sp.optionValue), label: sp.label })),
-                      }));
                     const selectedValue = !p.productId
                       ? ""
                       : isAllBranch
@@ -1801,7 +1835,10 @@ export default function TaxInvoice() {
                           {p.branchId ? (
                             <Select
                               inputId={`product_${i}`}
-                              options={pickerGroups}
+                              options={branchProducts.map((sp) => ({
+                                value: String(sp.optionValue),
+                                label: sp.label,
+                              }))}
                               value={
                                 selectedValue
                                   ? {
@@ -1903,9 +1940,13 @@ export default function TaxInvoice() {
                 <div>
                   Subtotal (Taxable): <strong>₹ {fmt2(subtotal)}</strong>
                 </div>
-                <div className="muted">
-                  CGST {cgstRate}%: ₹ {fmt2(cgstAmt)} | SGST {sgstRate}%: ₹ {fmt2(sgstAmt)}
-                </div>
+                {!isNonGst && (
+                  <div className="muted">
+                    {isIgst
+                      ? `IGST ${igstRate}%: ₹ ${fmt2(igstAmt)}`
+                      : `CGST ${cgstRate}%: ₹ ${fmt2(cgstAmt)} | SGST ${sgstRate}%: ₹ ${fmt2(sgstAmt)}`}
+                  </div>
+                )}
                 <div className="muted" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
                   <span>Round Off:</span>
                   <SignedAmountInput
@@ -1935,6 +1976,49 @@ export default function TaxInvoice() {
                 <input type="text" className="at-input" value={fmt2(balLines.open)} readOnly disabled />
               </div>
               {/* Same 4 lines as the printed bill */}
+              <div className="at-fg">
+                <label className="at-label">Amount Received (₹)</label>
+                <input
+                  type="number"
+                  className="at-input"
+                  name="paidAmount"
+                  min="0"
+                  step="any"
+                  placeholder="0.00 (amount actually paid)"
+                  value={form.paidAmount}
+                  onChange={handleForm}
+                  onWheel={(e) => e.target.blur()}
+                />
+                <div className="at-hint">
+                  Only the amount received counts as paid.{" "}
+                  <button
+                    type="button"
+                    style={{ border: 0, background: "none", color: "#0369a1", cursor: "pointer", padding: 0, fontSize: "inherit" }}
+                    onClick={() => setForm((prev) => ({ ...prev, paidAmount: String(netAmount) }))}
+                  >
+                    Full amount ₹{fmt2(netAmount)}
+                  </button>
+                </div>
+              </div>
+              <div className="at-fg">
+                <label className="at-label">Payment Status</label>
+                <div
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                    height: 40,
+                  }}
+                >
+                  <span style={{ background: payStatus.bg, color: payStatus.color, borderRadius: 999, padding: "4px 12px", fontWeight: 700, fontSize: 13 }}>
+                    {payStatus.label}
+                  </span>
+                  {payStatus.label !== "Fully Paid" && (
+                    <span style={{ fontSize: 13, color: "#475569" }}>
+                      Remaining: <b>₹{fmt2(invRemaining)}</b>
+                    </span>
+                  )}
+                </div>
+                <div className="at-hint">Invoice ₹{fmt2(netAmount)} · Paid ₹{fmt2(paidAmount)}</div>
+              </div>
               <div className="at-fg">
                 <label className="at-label">Advance Received (₹)</label>
                 <input type="text" className="at-input" value={fmt2(balLines.advance)} readOnly disabled />
@@ -2056,7 +2140,7 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
   ].filter(Boolean);
 
   const buyerRightDetails = [
-    { label: "Payment", value: form.paymentMode },
+    { label: "Payment", value: form.paymentMode || "Credit" },
     form.dispatchedThrough ? { label: "Transport", value: form.dispatchedThrough } : null,
     form.ewayNumber ? { label: "E-Way Bill No.", value: form.ewayNumber } : null,
     form.destination ? { label: "Delivery To", value: form.destination } : null,
@@ -2079,11 +2163,15 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
     });
     L.push("");
     L.push(`Taxable Value: ₹${fmt2(subtotal)}`);
-    L.push(`CGST (${cgstRate}%): ₹${fmt2(cgstAmt)}`);
-    L.push(`SGST (${sgstRate}%): ₹${fmt2(sgstAmt)}`);
+    if (isIgst) {
+      L.push(`IGST (${igstRate}%): ₹${fmt2(igstAmt)}`);
+    } else if (!isNonGst) {
+      L.push(`CGST (${cgstRate}%): ₹${fmt2(cgstAmt)}`);
+      L.push(`SGST (${sgstRate}%): ₹${fmt2(sgstAmt)}`);
+    }
     if (roundOff) L.push(`Round Off: ${roundOff > 0 ? "+" : "-"}₹${fmt2(Math.abs(roundOff))}`);
     L.push(`*Invoice Total: ₹${fmt2(netAmount)}*`);
-    L.push(`Payment: ${form.paymentMode || "-"}`);
+    L.push(`Payment: ${form.paymentMode || "Credit"}`);
     L.push(
       `Open Balance: ₹${fmt2(balLines.open)}`,
       `Advance Received: ₹${fmt2(balLines.advance)}`,
@@ -2231,17 +2319,18 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           </tbody>
         </table>
 
-        {/* CONSIGNEE + META */}
+        {/* BUYER + META */}
         <table style={{ width: "100%", borderCollapse: "collapse", borderBottom: B }}>
           <tbody>
             <tr>
               <td style={{ width: "50%", borderRight: B, padding: "6px 7px", verticalAlign: "top" }}>
-                <div style={sectionHead}>Consignee (Ship to)</div>
-                <div style={{ fontWeight: "bold", fontSize: 16 }}>{form.consigneeName || form.buyerName}</div>
-                <div style={{ fontSize: 14 }}>{form.consigneeAddress || form.buyerAddress}</div>
+                <div style={sectionHead}>Buyer (Bill to)</div>
+                <div style={{ fontWeight: "bold", fontSize: 16 }}>{form.buyerName}</div>
+                <div style={{ fontSize: 14 }}>{form.buyerAddress}</div>
+                {form.buyerPhone && <div style={{ fontSize: 14 }}>Ph: {form.buyerPhone}</div>}
+                {form.buyerGst && <div style={{ fontSize: 14 }}>GSTIN/UIN: {form.buyerGst}</div>}
                 <div style={{ fontSize: 14 }}>
-                  State Name: {form.consigneeState || form.buyerState}, Code:{" "}
-                  {form.consigneeStateCode || form.buyerStateCode}
+                  State Name: {form.buyerState}, Code: {form.buyerStateCode}
                 </div>
               </td>
               <td style={{ width: "50%", padding: "6px 7px", verticalAlign: "top" }}>
@@ -2258,18 +2347,17 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           </tbody>
         </table>
 
-        {/* BUYER + PAYMENT */}
+        {/* CONSIGNEE + PAYMENT */}
         <table style={{ width: "100%", borderCollapse: "collapse", borderBottom: B }}>
           <tbody>
             <tr>
               <td style={{ width: "50%", borderRight: B, padding: "6px 7px", verticalAlign: "top" }}>
-                <div style={sectionHead}>Buyer (Bill to)</div>
-                <div style={{ fontWeight: "bold", fontSize: 16 }}>{form.buyerName}</div>
-                <div style={{ fontSize: 14 }}>{form.buyerAddress}</div>
-                {form.buyerPhone && <div style={{ fontSize: 14 }}>Ph: {form.buyerPhone}</div>}
-                {form.buyerGst && <div style={{ fontSize: 14 }}>GSTIN/UIN: {form.buyerGst}</div>}
+                <div style={sectionHead}>Consignee (Ship to)</div>
+                <div style={{ fontWeight: "bold", fontSize: 16 }}>{form.consigneeName || form.buyerName}</div>
+                <div style={{ fontSize: 14 }}>{form.consigneeAddress || form.buyerAddress}</div>
                 <div style={{ fontSize: 14 }}>
-                  State Name: {form.buyerState}, Code: {form.buyerStateCode}
+                  State Name: {form.consigneeState || form.buyerState}, Code:{" "}
+                  {form.consigneeStateCode || form.buyerStateCode}
                 </div>
               </td>
               <td style={{ padding: "6px 7px", verticalAlign: "top", width: "50%" }}>
@@ -2370,18 +2458,30 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
                 </td>
                 <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(subtotal)}</td>
               </tr>
-              <tr>
-                <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
-                  CGST TAX
-                </td>
-                <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(cgstAmt)}</td>
-              </tr>
-              <tr>
-                <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold" })}>
-                  SGST TAX
-                </td>
-                <td style={dc({ textAlign: "right", fontWeight: "bold" })}>{fmt2(sgstAmt)}</td>
-              </tr>
+              {isIgst && (
+                <tr>
+                  <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
+                    IGST TAX
+                  </td>
+                  <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(igstAmt)}</td>
+                </tr>
+              )}
+              {!isNonGst && !isIgst && (
+                <>
+                  <tr>
+                    <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
+                      CGST TAX
+                    </td>
+                    <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(cgstAmt)}</td>
+                  </tr>
+                  <tr>
+                    <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold" })}>
+                      SGST TAX
+                    </td>
+                    <td style={dc({ textAlign: "right", fontWeight: "bold" })}>{fmt2(sgstAmt)}</td>
+                  </tr>
+                </>
+              )}
               {roundOff !== 0 && (
                 <tr>
                   <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold" })}>
@@ -2428,31 +2528,53 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           </tbody>
         </table>
 
-        {/* HSN TAX TABLE */}
+        {/* HSN TAX TABLE (not for Non-GST bills) */}
+        {!isNonGst && (<>
         <table
           style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", borderBottom: B }}
           className="inv-footer"
         >
           <colgroup>
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "10%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "16%" }} />
+            {isIgst ? (
+              <>
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "26%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "20%" }} />
+                <col style={{ width: "18%" }} />
+              </>
+            ) : (
+              <>
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "16%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "16%" }} />
+                <col style={{ width: "16%" }} />
+              </>
+            )}
           </colgroup>
           <thead>
             <tr>
-              {[
-                ["HSN/SAC", "center"],
-                ["Taxable\nValue", "right"],
-                ["CGST\nRate", "center"],
-                ["CGST\nAmount", "right"],
-                ["SGST/UTGST\nRate", "center"],
-                ["SGST/UTGST\nAmount", "right"],
-                ["Total Tax\nAmount", "right"],
-              ].map(([label, align]) => (
+              {(isIgst
+                ? [
+                    ["HSN/SAC", "center"],
+                    ["Taxable\nValue", "right"],
+                    ["IGST\nRate", "center"],
+                    ["IGST\nAmount", "right"],
+                    ["Total Tax\nAmount", "right"],
+                  ]
+                : [
+                    ["HSN/SAC", "center"],
+                    ["Taxable\nValue", "right"],
+                    ["CGST\nRate", "center"],
+                    ["CGST\nAmount", "right"],
+                    ["SGST/UTGST\nRate", "center"],
+                    ["SGST/UTGST\nAmount", "right"],
+                    ["Total Tax\nAmount", "right"],
+                  ]
+              ).map(([label, align]) => (
                 <th
                   key={label}
                   style={dhc({ textAlign: align, whiteSpace: "pre-line", padding: "2px 6px", fontSize: 12 })}
@@ -2467,20 +2589,36 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
               <tr key={hsn}>
                 <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{hsn}</td>
                 <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.taxableValue)}</td>
-                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{cgstRate}%</td>
-                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst)}</td>
-                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{sgstRate}%</td>
-                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.sgst)}</td>
-                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst + d.sgst)}</td>
+                {isIgst ? (
+                  <>
+                    <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{igstRate}%</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.igst)}</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.igst)}</td>
+                  </>
+                ) : (
+                  <>
+                    <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{cgstRate}%</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst)}</td>
+                    <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{sgstRate}%</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.sgst)}</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst + d.sgst)}</td>
+                  </>
+                )}
               </tr>
             ))}
             <tr style={{ background: "#f5f5f5", fontWeight: "bold" }}>
               <td style={dc({ borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>Total</td>
               <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(subtotal)}</td>
               <td style={dc({ borderTop: B, borderBottom: B })}></td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(cgstAmt)}</td>
-              <td style={dc({ borderTop: B, borderBottom: B })}></td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(sgstAmt)}</td>
+              {isIgst ? (
+                <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(igstAmt)}</td>
+              ) : (
+                <>
+                  <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(cgstAmt)}</td>
+                  <td style={dc({ borderTop: B, borderBottom: B })}></td>
+                  <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(sgstAmt)}</td>
+                </>
+              )}
               <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(totalTax)}</td>
             </tr>
           </tbody>
@@ -2491,6 +2629,7 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           <strong>Tax Amount (in words):</strong>&nbsp;
           <em style={{ fontWeight: "bold" }}>{amountInWords(totalTax)}</em>
         </div>
+        </>)}
 
         {/* FOOTER */}
         <div style={{ marginTop: "auto" }}>

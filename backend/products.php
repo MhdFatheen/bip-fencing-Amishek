@@ -13,6 +13,11 @@ $id     = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $action = $_GET['action'] ?? null;
 $isDamage = isset($_GET['damage']);
 
+// Kambi Kattu fixed qty per product (auto-added, no SQL needed)
+if (!$conn->query("SHOW COLUMNS FROM products LIKE 'kambi_qty'")->num_rows) {
+    $conn->query("ALTER TABLE products ADD COLUMN kambi_qty DOUBLE NOT NULL DEFAULT 0");
+}
+
 function respond(int $code, $data): void {
     http_response_code($code);
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -212,9 +217,11 @@ if ($method === 'POST') {
     if ($branchId === null && $authUser['role'] === 'admin') {
         $branchId = (int)($d['branch_id'] ?? 0);
     }
-    if (!$branchId) respond(400, ['error' => 'No branch selected. Please select a branch.']);
+    // admin with "All Branch" chosen in the form needs no single branch (added to every branch below)
+    if (!$branchId && $authUser['role'] !== 'admin') respond(400, ['error' => 'No branch selected. Please select a branch.']);
 
-    $productName  = $d['productName'];
+    $productName  = trim((string)$d['productName']);
+    if ($productName === '') respond(422, ['error' => 'productName is required']);
     $hsn          = $d['hsn']          ?? '';
     $unit         = $d['unit']         ?? 'Pcs';
     $factoryPrice = $d['factoryPrice'] ?? 0;
@@ -224,13 +231,48 @@ if ($method === 'POST') {
     $description  = $d['description']  ?? '';
     $productDate  = $d['productDate']  ?? date('Y-m-d');
 
-    // admin adds to ALL branches; branch users only to their own
+    // admin adds to ALL branches (default) or only to the branch chosen in the form;
+    // branch users only to their own
     $targetBranches = [];
     if ($authUser['role'] === 'admin') {
         $res = $conn->query("SELECT id FROM branches");
         while ($b = $res->fetch_assoc()) $targetBranches[] = (int)$b['id'];
+        $chosen = (int)($d['branch_id'] ?? 0);
+        if ($chosen > 0) {
+            if (!in_array($chosen, $targetBranches, true)) respond(422, ['error' => 'Invalid branch selected']);
+            $targetBranches = [$chosen];
+            $branchId = $chosen;
+        }
     }
     if (!$targetBranches) $targetBranches = [$branchId];
+    if (!$branchId) $branchId = $targetBranches[0] ?? 0;   // used for the returned row / stock log
+    if (!$branchId) respond(400, ['error' => 'No branch selected. Please select a branch.']);
+
+    // Same product name (ignoring upper/lower case and extra spaces) in a branch = the
+    // same product: it is never created twice. HSN is not part of this check.
+    $dupSt = $conn->prepare("SELECT id, product_name FROM products WHERE branch_id = ? AND LOWER(TRIM(product_name)) = LOWER(?) LIMIT 1");
+    $toCreate = [];
+    $existingName = null;
+    $existingId = null;
+    foreach ($targetBranches as $bid) {
+        $dupSt->bind_param('is', $bid, $productName);
+        $dupSt->execute();
+        $dup = $dupSt->get_result()->fetch_assoc();
+        if ($dup) {
+            if ($existingName === null) { $existingName = $dup['product_name']; $existingId = (int)$dup['id']; }
+        } else {
+            $toCreate[] = $bid;
+        }
+    }
+    $dupSt->close();
+    if (!$toCreate) {
+        respond(409, [
+            'error'       => 'Product "' . $productName . '" already exists in this branch (as "' . $existingName . '")',
+            'existing_id' => $existingId,
+        ]);
+    }
+    $targetBranches = $toCreate;                      // branches that already have it are left untouched
+    if (!in_array($branchId, $targetBranches, true)) $branchId = $targetBranches[0];
 
     $stmt = $conn->prepare("
         INSERT INTO products (product_name, hsn, unit, product_date, factory_price, selling_price, stock_qty, min_stock, description, branch_id)
@@ -246,6 +288,8 @@ if ($method === 'POST') {
             respond(500, ['error' => $e->getMessage()]);
         }
         if ($bid === $branchId || !$newId) $newId = $conn->insert_id;
+        $kq = (float)($d['kambiQty'] ?? 0);
+        $conn->query("UPDATE products SET kambi_qty = $kq WHERE id = " . (int)$conn->insert_id);
     }
     $result = $conn->query("SELECT * FROM products WHERE id = $newId");
 
@@ -292,7 +336,8 @@ if ($method === 'PUT') {
         if (!$chk->get_result()->fetch_assoc()) respond(403, ['error' => 'Access denied – product not in your branch']);
     }
 
-    $productName  = $d['productName'];
+    $productName  = trim((string)$d['productName']);
+    if ($productName === '') respond(422, ['error' => 'productName is required']);
     $hsn          = $d['hsn']          ?? '';
     $unit         = $d['unit']         ?? 'Pcs';
     $factoryPrice = $d['factoryPrice'] ?? 0;
@@ -301,6 +346,22 @@ if ($method === 'PUT') {
     $minStock     = $d['minStock']     ?? 0;
     $description  = $d['description']  ?? '';
     $productDate  = $d['productDate']  ?? date('Y-m-d');
+
+    // renaming must not create a second product with the same name (any letter case) in the branch
+    $dupSt = $conn->prepare("
+        SELECT o.id, o.product_name FROM products o
+          JOIN products me ON me.id = ? AND o.branch_id <=> me.branch_id
+         WHERE o.id <> me.id AND LOWER(TRIM(o.product_name)) = LOWER(?) LIMIT 1
+    ");
+    $dupSt->bind_param('is', $id, $productName);
+    $dupSt->execute();
+    if ($dup = $dupSt->get_result()->fetch_assoc()) {
+        respond(409, [
+            'error'       => 'Product "' . $productName . '" already exists in this branch (as "' . $dup['product_name'] . '")',
+            'existing_id' => (int)$dup['id'],
+        ]);
+    }
+    $dupSt->close();
 
     $stmt = $conn->prepare("
         UPDATE products SET
@@ -315,6 +376,8 @@ if ($method === 'PUT') {
     } catch (mysqli_sql_exception $e) {
         respond(500, ['error' => $e->getMessage()]);
     }
+    $kq = (float)($d['kambiQty'] ?? 0);
+    $conn->query("UPDATE products SET kambi_qty = $kq WHERE id = $id");
     $result = $conn->query("SELECT * FROM products WHERE id = $id");
     respond(200, $result->fetch_assoc());
 }

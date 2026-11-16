@@ -610,10 +610,31 @@ body {
   .main-content { margin-left: 0; }
 }
 
+/* Saved-invoice view: its own scroll area (right-side scrollbar) under the top bar,
+   so it scrolls even if a parent container is locked or clipped */
+.inv-view-scroll {
+  position: fixed;
+  top: 60px;
+  left: var(--sidebar-width);
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+@media (max-width: 768px) {
+  .inv-view-scroll { left: 0; padding: 12px !important; }
+}
+@media print {
+  .inv-view-scroll { position: static !important; overflow: visible !important; padding: 0 !important; }
+}
+
 /* A4 documents (invoice / quotation) scroll inside their box on phones
    instead of making the whole page wider than the screen */
 @media screen and (max-width: 900px) {
-  .doc-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .doc-scroll { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; overscroll-behavior-y: auto; }
 }
 @media print {
   .doc-scroll { overflow: visible !important; }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/api";
+import { branchLabel } from "../utils/branchNames";
 import PhoneInput from "../components/PhoneInput";
 import SharePrompt, { shareImage } from "../components/SharePrompt";
 import { waLink, showPhone } from "../utils/phone";
@@ -122,7 +123,36 @@ function numberToWords(num) {
 
 // ── Tax Invoice Print View ────────────────────────────────────
 // ── Tax Invoice Print View (A4 print-optimized) ─────────────────
-function TaxInvoiceView({ inv, onBack }) {
+function TaxInvoiceView({ inv, onBack, onReload }) {
+  const navigate = useNavigate();
+  // ── Sales return: type returned qty per item → bill recalculated on remaining qty
+  const [retOpen, setRetOpen] = useState(false);
+  const [retQty, setRetQty] = useState({});
+  const [retSaving, setRetSaving] = useState(false);
+  const openReturn = () => {
+    const m = {};
+    (inv.items || []).forEach((it) => (m[it.id] = Number(it.return_qty) || ""));
+    setRetQty(m);
+    setRetOpen(true);
+  };
+  const saveReturn = async () => {
+    setRetSaving(true);
+    try {
+      const res = await apiFetch(`/client.php?return_invoice=${inv.id}`, {
+        method: "POST",
+        body: JSON.stringify({ items: Object.entries(retQty).map(([id, q]) => ({ id: Number(id), return_qty: Number(q) || 0 })) }),
+      });
+      const d = await res.json();
+      if (!d.success) throw new Error(d.message || "Return failed");
+      setRetOpen(false);
+      onReload && onReload(inv.invoice_no);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setRetSaving(false);
+    }
+  };
+  const isAdminUser = localStorage.getItem("role") === "admin";
   const items = inv.items || [];
   const B = "1px solid #000";
 
@@ -183,6 +213,7 @@ function TaxInvoiceView({ inv, onBack }) {
     const taxableAmt = parseFloat(it.taxable_amt) || rateExcl * qty;
     return {
       desc: it.description || "",
+      ret: Number(it.return_qty) || 0,
       hsn: it.hsn || "",
       per: it.per || "NOS",
       qty,
@@ -221,12 +252,17 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
     ...extra,
   });
 
-  const cgstRate = Number(inv.cgst_rate || 0);
-  const sgstRate = Number(inv.sgst_rate || 0);
+  const isIgst = inv.gst_type === "igst"; // single IGST instead of CGST + SGST
+  const cgstRate = isIgst ? 0 : Number(inv.cgst_rate || 0);
+  const sgstRate = isIgst ? 0 : Number(inv.sgst_rate || 0);
+  const igstRate = isIgst ? Number(inv.gst_rate || 0) : 0;
+  // Non-GST bill (GST rate 0): no GST lines / tax table
+  const isNonGst = inv.gst_rate !== undefined && inv.gst_rate !== null && Number(inv.gst_rate) === 0 && Number(inv.total_tax || 0) === 0;
   const subtotal = Number(inv.subtotal || 0);
   const cgstAmt = Number(inv.cgst_amount || 0);
   const sgstAmt = Number(inv.sgst_amount || 0);
-  const totalTax = cgstAmt + sgstAmt;
+  const igstAmt = isIgst ? Number(inv.total_tax || 0) : 0;
+  const totalTax = isIgst ? igstAmt : cgstAmt + sgstAmt;
   const netAmount = Number(inv.net_amount || 0);
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const openBalance = Number(inv.open_balance || 0);
@@ -243,10 +279,11 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
   const hsnGroups = {};
   rows.forEach((r) => {
     const key = r.hsn || "–";
-    if (!hsnGroups[key]) hsnGroups[key] = { taxableValue: 0, cgst: 0, sgst: 0 };
+    if (!hsnGroups[key]) hsnGroups[key] = { taxableValue: 0, cgst: 0, sgst: 0, igst: 0 };
     hsnGroups[key].taxableValue += r.taxableAmt;
     hsnGroups[key].cgst += r.taxableAmt * (cgstRate / 100);
     hsnGroups[key].sgst += r.taxableAmt * (sgstRate / 100);
+    hsnGroups[key].igst += r.taxableAmt * (igstRate / 100);
   });
 
   const leftMetaFields = [
@@ -273,17 +310,67 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
   ].filter(Boolean);
 
   return (
-    <div style={{ background: "#f0f0f0", minHeight: "100vh", padding: "20px" }}>
+    <div className="inv-view-scroll" style={{ background: "#f0f0f0", padding: "20px" }}>
       <style>{printStyles}</style>
 
-      <div className="no-print" style={{ display: "flex", justifyContent: "center", gap: 12, paddingBottom: 16 }}>
+      <div
+        className="no-print inv-actionbar"
+        style={{ display: "flex", justifyContent: "center", flexWrap: "wrap", gap: 8, padding: "8px 0 12px", position: "sticky", top: 0, zIndex: 40, background: "#f0f0f0" }}
+      >
         <button className="btn btn-outline-secondary btn-sm" onClick={onBack}>
           ← Back to Customers
         </button>
+        {isAdminUser && (
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => navigate("/tax-invoice", { state: { continueInvoiceNo: inv.invoice_no } })}
+          >
+            ✏️ Edit Bill
+          </button>
+        )}
+        {isAdminUser && (
+          <button className="btn btn-warning btn-sm" onClick={openReturn}>
+            ↩️ Return
+          </button>
+        )}
         <button className="btn btn-success btn-sm" onClick={() => window.print()}>
           🖨️ Print
         </button>
       </div>
+
+      {retOpen && (
+        <div className="no-print" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 10, padding: 20, width: "min(520px, 94vw)", maxHeight: "85vh", overflow: "auto" }}>
+            <h5 style={{ marginBottom: 12 }}>↩️ Return – Bill {inv.invoice_no}</h5>
+            <table className="table table-sm">
+              <thead><tr><th>Item</th><th>Billed</th><th>Return Qty</th><th>Remaining</th></tr></thead>
+              <tbody>
+                {(inv.items || []).map((it) => {
+                  const orig = it.orig_qty != null ? Number(it.orig_qty) : Number(it.qty) || 0;
+                  const q = Math.min(orig, Math.max(0, Number(retQty[it.id]) || 0));
+                  return (
+                    <tr key={it.id}>
+                      <td>{it.description}</td>
+                      <td>{orig}</td>
+                      <td style={{ width: 110 }}>
+                        <input type="number" min="0" max={orig} step="any" className="form-control form-control-sm"
+                          value={retQty[it.id] ?? ""} onChange={(e) => setRetQty((m) => ({ ...m, [it.id]: e.target.value }))} />
+                      </td>
+                      <td><b>{orig - q}</b></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="btn btn-outline-secondary btn-sm" onClick={() => setRetOpen(false)}>Cancel</button>
+              <button className="btn btn-warning btn-sm" disabled={retSaving} onClick={saveReturn}>
+                {retSaving ? "Saving…" : "Save Return"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="doc-scroll">
       <div
@@ -328,19 +415,18 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           </tbody>
         </table>
 
-        {/* CONSIGNEE + META */}
+        {/* BUYER + META */}
         <table style={{ width: "100%", borderCollapse: "collapse", borderBottom: B }}>
           <tbody>
             <tr>
               <td style={{ width: "50%", borderRight: B, padding: "6px 7px", verticalAlign: "top" }}>
-                <div style={sectionHead}>Consignee (Ship to)</div>
-                <div style={{ fontWeight: "bold", fontSize: 16 }}>
-                  {inv.consignee_name || inv.buyer_name}
-                </div>
-                <div style={{ fontSize: 14 }}>{inv.consignee_address || inv.buyer_address}</div>
+                <div style={sectionHead}>Buyer (Bill to)</div>
+                <div style={{ fontWeight: "bold", fontSize: 16 }}>{inv.buyer_name}</div>
+                <div style={{ fontSize: 14 }}>{inv.buyer_address}</div>
+                {inv.buyer_phone && <div style={{ fontSize: 14 }}>Ph: {inv.buyer_phone}</div>}
+                {inv.buyer_gst && <div style={{ fontSize: 14 }}>GSTIN/UIN: {inv.buyer_gst}</div>}
                 <div style={{ fontSize: 14 }}>
-                  State Name: {inv.consignee_state || inv.buyer_state}, Code:{" "}
-                  {inv.consignee_state_code || inv.buyer_state_code}
+                  State Name: {inv.buyer_state}, Code: {inv.buyer_state_code}
                 </div>
               </td>
               <td style={{ width: "50%", padding: "6px 7px", verticalAlign: "top" }}>
@@ -357,18 +443,19 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           </tbody>
         </table>
 
-        {/* BUYER + PAYMENT */}
+        {/* CONSIGNEE + PAYMENT */}
         <table style={{ width: "100%", borderCollapse: "collapse", borderBottom: B }}>
           <tbody>
             <tr>
               <td style={{ width: "50%", borderRight: B, padding: "6px 7px", verticalAlign: "top" }}>
-                <div style={sectionHead}>Buyer (Bill to)</div>
-                <div style={{ fontWeight: "bold", fontSize: 16 }}>{inv.buyer_name}</div>
-                <div style={{ fontSize: 14 }}>{inv.buyer_address}</div>
-                {inv.buyer_phone && <div style={{ fontSize: 14 }}>Ph: {inv.buyer_phone}</div>}
-                {inv.buyer_gst && <div style={{ fontSize: 14 }}>GSTIN/UIN: {inv.buyer_gst}</div>}
+                <div style={sectionHead}>Consignee (Ship to)</div>
+                <div style={{ fontWeight: "bold", fontSize: 16 }}>
+                  {inv.consignee_name || inv.buyer_name}
+                </div>
+                <div style={{ fontSize: 14 }}>{inv.consignee_address || inv.buyer_address}</div>
                 <div style={{ fontSize: 14 }}>
-                  State Name: {inv.buyer_state}, Code: {inv.buyer_state_code}
+                  State Name: {inv.consignee_state || inv.buyer_state}, Code:{" "}
+                  {inv.consignee_state_code || inv.buyer_state_code}
                 </div>
               </td>
               <td style={{ padding: "6px 7px", verticalAlign: "top", width: "50%" }}>
@@ -420,7 +507,13 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
               {rows.map((r, i) => (
                 <tr key={i} className="inv-product-row">
                   <td style={dc({ textAlign: "center" })}>{i + 1}</td>
-                  <td style={dc({ fontWeight: "bold", fontSize: 18 })}>{r.desc}</td>
+                  <td style={dc({ fontWeight: "bold", fontSize: 18 })}>{r.desc}
+                    {r.ret > 0 && (
+                      <div style={{ fontSize: 12, fontWeight: "normal" }}>
+                        (Returned: {r.ret} × ₹{fmt2(r.rateIncl)} = ₹{fmt2(r.ret * r.rateIncl)})
+                      </div>
+                    )}
+                  </td>
                   <td style={dc({ textAlign: "center", fontWeight: "bold" })}>{r.hsn || "–"}</td>
                   <td style={dc({ textAlign: "center", fontWeight: "bold" })}>{fmt2(r.qty)}</td>
                   <td style={dc({ textAlign: "right" })}>{fmt2(r.rateIncl)}</td>
@@ -468,20 +561,32 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
                   {fmt2(subtotal)}
                 </td>
               </tr>
-              <tr>
-                <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
-                  CGST TAX
-                </td>
-                <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>
-                  {fmt2(cgstAmt)}
-                </td>
-              </tr>
-              <tr>
-                <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold" })}>
-                  SGST TAX
-                </td>
-                <td style={dc({ textAlign: "right", fontWeight: "bold" })}>{fmt2(sgstAmt)}</td>
-              </tr>
+              {isIgst && (
+                <tr>
+                  <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
+                    IGST TAX
+                  </td>
+                  <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>{fmt2(igstAmt)}</td>
+                </tr>
+              )}
+              {!isNonGst && !isIgst && (
+                <>
+                  <tr>
+                    <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold", borderTop: B })}>
+                      CGST TAX
+                    </td>
+                    <td style={dc({ textAlign: "right", fontWeight: "bold", borderTop: B })}>
+                      {fmt2(cgstAmt)}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={7} style={dc({ textAlign: "right", fontStyle: "italic", fontWeight: "bold" })}>
+                      SGST TAX
+                    </td>
+                    <td style={dc({ textAlign: "right", fontWeight: "bold" })}>{fmt2(sgstAmt)}</td>
+                  </tr>
+                </>
+              )}
 
               <tr style={{ background: "#f0f0f0" }}>
                 <td style={dc({ borderTop: B, borderBottom: B })}></td>
@@ -518,28 +623,50 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           </tbody>
         </table>
 
-        {/* HSN TAX TABLE */}
+        {/* HSN TAX TABLE (not for Non-GST bills) */}
+        {!isNonGst && (<>
         <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", borderBottom: B }} className="inv-footer">
           <colgroup>
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "10%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "16%" }} />
+            {isIgst ? (
+              <>
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "26%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "20%" }} />
+                <col style={{ width: "18%" }} />
+              </>
+            ) : (
+              <>
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "16%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "16%" }} />
+                <col style={{ width: "16%" }} />
+              </>
+            )}
           </colgroup>
           <thead>
             <tr>
-              {[
-                ["HSN/SAC", "center"],
-                ["Taxable\nValue", "right"],
-                ["CGST\nRate", "center"],
-                ["CGST\nAmount", "right"],
-                ["SGST/UTGST\nRate", "center"],
-                ["SGST/UTGST\nAmount", "right"],
-                ["Total Tax\nAmount", "right"],
-              ].map(([label, align]) => (
+              {(isIgst
+                ? [
+                    ["HSN/SAC", "center"],
+                    ["Taxable\nValue", "right"],
+                    ["IGST\nRate", "center"],
+                    ["IGST\nAmount", "right"],
+                    ["Total Tax\nAmount", "right"],
+                  ]
+                : [
+                    ["HSN/SAC", "center"],
+                    ["Taxable\nValue", "right"],
+                    ["CGST\nRate", "center"],
+                    ["CGST\nAmount", "right"],
+                    ["SGST/UTGST\nRate", "center"],
+                    ["SGST/UTGST\nAmount", "right"],
+                    ["Total Tax\nAmount", "right"],
+                  ]
+              ).map(([label, align]) => (
                 <th key={label} style={dhc({ textAlign: align, whiteSpace: "pre-line", padding: "2px 6px", fontSize: 12 })}>
                   {label}
                 </th>
@@ -551,20 +678,36 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
               <tr key={hsn}>
                 <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{hsn}</td>
                 <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.taxableValue)}</td>
-                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{cgstRate}%</td>
-                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst)}</td>
-                <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{sgstRate}%</td>
-                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.sgst)}</td>
-                <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst + d.sgst)}</td>
+                {isIgst ? (
+                  <>
+                    <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{igstRate}%</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.igst)}</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.igst)}</td>
+                  </>
+                ) : (
+                  <>
+                    <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{cgstRate}%</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst)}</td>
+                    <td style={dc({ textAlign: "center", fontSize: AMT_FONT })}>{sgstRate}%</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.sgst)}</td>
+                    <td style={dc({ textAlign: "right", fontSize: AMT_FONT })}>{fmt2(d.cgst + d.sgst)}</td>
+                  </>
+                )}
               </tr>
             ))}
             <tr style={{ background: "#f5f5f5", fontWeight: "bold" }}>
               <td style={dc({ borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>Total</td>
               <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(subtotal)}</td>
               <td style={dc({ borderTop: B, borderBottom: B })}></td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(cgstAmt)}</td>
-              <td style={dc({ borderTop: B, borderBottom: B })}></td>
-              <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(sgstAmt)}</td>
+              {isIgst ? (
+                <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(igstAmt)}</td>
+              ) : (
+                <>
+                  <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(cgstAmt)}</td>
+                  <td style={dc({ borderTop: B, borderBottom: B })}></td>
+                  <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(sgstAmt)}</td>
+                </>
+              )}
               <td style={dc({ textAlign: "right", borderTop: B, borderBottom: B, fontSize: AMT_FONT })}>{fmt2(totalTax)}</td>
             </tr>
           </tbody>
@@ -574,6 +717,7 @@ const MIN_ROWS = itemCount >= PAGE_FILL_ROWS ? 0 : Math.max(0, PAGE_FILL_ROWS - 
           <strong>Tax Amount (in words):</strong>&nbsp;
           <em style={{ fontWeight: "bold" }}>{numberToWords(totalTax)}</em>
         </div>
+        </>)}
 
         {/* FOOTER */}
         <div style={{ marginTop: "auto" }}>
@@ -639,6 +783,7 @@ function QuotationView({ data, onBack }) {
   const taxable = subtotal - discAmt;
   const taxRate = isGst ? Number(d.tax_percent || 0) : 0;
   const taxAmt = (taxable * taxRate) / 100;
+  const isIgst = isGst && d.gst_type === "igst"; // single IGST instead of CGST + SGST
   const cgstAmt = taxAmt / 2;
   const sgstAmt = taxAmt / 2;
   const roundOff = Math.round(taxable + taxAmt) - (taxable + taxAmt);
@@ -968,7 +1113,17 @@ function QuotationView({ data, onBack }) {
                 {fmt(taxable)}
               </td>
             </tr>
-            {isGst && (
+            {isIgst && (
+              <tr>
+                <td colSpan={6} style={{ textAlign: "right", padding: "3px 8px", fontSize: "11px" }}>
+                  IGST TAX
+                </td>
+                <td style={{ textAlign: "right", padding: "3px 8px", fontWeight: "bold" }}>
+                  {fmt(taxAmt)}
+                </td>
+              </tr>
+            )}
+            {isGst && !isIgst && (
               <>
                 <tr>
                   <td
@@ -1123,7 +1278,7 @@ function QuotationView({ data, onBack }) {
             </div>
             <div>Bank Name : CANARA BANK</div>
             <div>A/C No. : 120017946948</div>
-            <div>Branch &amp; IFS Code: THERKU Kadambankulam &amp; CNRB0003657</div>
+            <div>Branch &amp; IFS Code: THERKU VALLIOOR &amp; CNRB0003657</div>
           </div>
           <div style={{ flex: 1, padding: "8px", fontSize: "11px" }}>
             <div style={{ fontWeight: "bold", marginBottom: "4px" }}>
@@ -1271,6 +1426,26 @@ export default function Clients() {
   const [clientDetail, setClientDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [search, setSearch] = useState("");
+  // Vehicle number search (same search box) → trips from bills
+  const [trips, setTrips] = useState([]);
+  useEffect(() => {
+    const q = search.replace(/[\s.-]/g, "");
+    // looks like a vehicle no: letters + digits, 4+ chars (e.g. TN72AB1234)
+    if (!(q.length >= 4 && /[a-z]/i.test(q) && /\d/.test(q))) {
+      setTrips([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/client.php?vehicle=${encodeURIComponent(q)}`);
+        const d = await res.json();
+        setTrips(d.success ? d.trips || [] : []);
+      } catch {
+        setTrips([]);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [search]);
   const [statusFilter, setStatusFilter] = useState("");
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -1299,6 +1474,26 @@ export default function Clients() {
 
   // Page-level tab: Customer Directory vs Quotations
   const [pageView, setPageView] = useState("clients");
+  // Invoices that have no registered customer (GST / Non-GST)
+  const [looseInvoices, setLooseInvoices] = useState([]);
+  const [looseLoading, setLooseLoading] = useState(false);
+  const [looseGst, setLooseGst] = useState("gst"); // "gst" | "nongst"
+  const [looseSearch, setLooseSearch] = useState("");
+  const fetchLooseInvoices = useCallback(async () => {
+    setLooseLoading(true);
+    try {
+      const res = await apiFetch("/client.php?loose_invoices=1");
+      const data = await res.json();
+      if (data.success) setLooseInvoices(data.invoices || []);
+    } catch (err) {
+      console.error("Failed to fetch invoices:", err);
+    } finally {
+      setLooseLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    fetchLooseInvoices();
+  }, [fetchLooseInvoices]);
   const [quotations, setQuotations] = useState([]);
   const [quotationsLoading, setQuotationsLoading] = useState(false);
   const [quotationSearch, setQuotationSearch] = useState("");
@@ -1416,11 +1611,17 @@ export default function Clients() {
   const handleViewInvoice = async (invoice_no) => {
     setViewLoading(true);
     try {
-      const res = await apiFetch(`/client.php?invoice_no=${invoice_no}`);
+      const res = await apiFetch(`/client.php?invoice_no=${encodeURIComponent(invoice_no)}`);
       const data = await res.json();
-      if (data.success) setViewInvoice(data.invoice);
+      if (data.success) {
+        setViewInvoice(data.invoice);
+        window.scrollTo(0, 0);
+      } else {
+        showToast(data.message || "Invoice could not be opened", "error");
+      }
     } catch (err) {
       console.error("Failed to fetch invoice:", err);
+      showToast("Invoice could not be opened", "error");
     } finally {
       setViewLoading(false);
     }
@@ -1657,6 +1858,40 @@ export default function Clients() {
       showToast("Server error", "error");
     } finally {
       setPayLoading(false);
+    }
+  };
+
+  // 📲 WhatsApp: send the customer's full statement
+  const sendStatementWA = async (client) => {
+    const phone = String(client.phone || "").replace(/\D/g, "").slice(-10);
+    if (phone.length !== 10) return showToast("This customer has no 10-digit phone number", "error");
+    try {
+      const res = await apiFetch(`/client.php?client_id=${client.id}`);
+      const d = await res.json();
+      if (!d.success) throw new Error(d.message || "Could not load statement");
+      const m = (v) => "₹" + Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+      const L = [`*BIP FENCING — Statement*`, `Customer: *${client.name}*`, `Date: ${new Date().toLocaleDateString("en-GB")}`, ""];
+      const inv = [...(d.invoices || [])].reverse();
+      if (inv.length) {
+        L.push("*Bills*");
+        inv.forEach((i) => L.push(`• ${i.invoice_date}  ${i.invoice_no}  ${m(i.net_amount)}`));
+        L.push("");
+      }
+      const pays = [...(d.payments || [])].reverse();
+      if (pays.length) {
+        L.push("*Received*");
+        pays.forEach((p) => L.push(`• ${p.payment_date}  ${m(p.amount)}${p.note ? "  (" + p.note + ")" : ""}`));
+        L.push("");
+      }
+      if (Number(d.total_purchased) > 0) L.push(`Purchases: ${m(d.total_purchased)}`);
+      L.push(`Total Billed: ${m(d.total_billed ?? client.total_billed)}`);
+      L.push(`Total Received: ${m(d.total_paid ?? client.total_paid)}`);
+      const net = Number(d.net_balance ?? client.net_balance) || 0;
+      L.push(net < 0 ? `*Advance with us: ${m(-net)}*` : `*Balance Due: ${m(net)}*`);
+      L.push("", "Thank you - BIP Fencing");
+      window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(L.join("\n"))}`, "_blank");
+    } catch (err) {
+      showToast(err.message, "error");
     }
   };
 
@@ -1908,7 +2143,7 @@ export default function Clients() {
   if (viewInvoice)
     return (
       <>
-        <TaxInvoiceView inv={viewInvoice} onBack={() => setViewInvoice(null)} />
+        <TaxInvoiceView inv={viewInvoice} onBack={() => setViewInvoice(null)} onReload={handleViewInvoice} />
         <SharePrompt pending={pendingShare} onClose={() => setPendingShare(null)} />
       </>
     );
@@ -1989,7 +2224,202 @@ export default function Clients() {
           <span>Quotations</span>
           <span className="cl-tab__badge">{quotations.length}</span>
         </button>
+        <button
+          type="button"
+          className={`cl-tab${pageView === "invoices" ? " cl-tab--active" : ""}`}
+          onClick={() => {
+            setPageView("invoices");
+            setSelected(null);
+            fetchLooseInvoices();
+          }}
+        >
+          <i className="bi bi-receipt"></i>
+          <span>Invoices</span>
+          <span className="cl-tab__badge">{looseInvoices.length}</span>
+        </button>
       </div>
+
+      {/* INVOICES TAB — invoices saved without a registered customer */}
+      {pageView === "invoices" && (() => {
+        const gstList = looseInvoices.filter((i) => i.is_gst);
+        const nonGstList = looseInvoices.filter((i) => !i.is_gst);
+        const q = looseSearch.trim().toLowerCase();
+        const list = (looseGst === "gst" ? gstList : nonGstList).filter(
+          (i) =>
+            !q ||
+            String(i.invoice_no).toLowerCase().includes(q) ||
+            String(i.buyer_name || "").toLowerCase().includes(q) ||
+            (i.items || []).some((it) => String(it.description || "").toLowerCase().includes(q)),
+        );
+        const showGst = looseGst === "gst";
+        return (
+          <div className="cl-card">
+            <div className="cl-card__head">
+              <i className="bi bi-receipt"></i>
+              <span>Invoices without a customer</span>
+              <span className="cl-count">{list.length} invoices</span>
+            </div>
+            <div className="cl-inv-bar">
+              <div className="cl-seg" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={looseGst === "gst"}
+                  className={`cl-seg__btn${looseGst === "gst" ? " cl-seg__btn--on" : ""}`}
+                  onClick={() => setLooseGst("gst")}
+                >
+                  GST <span className="cl-seg__n">{gstList.length}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={looseGst === "nongst"}
+                  className={`cl-seg__btn${looseGst === "nongst" ? " cl-seg__btn--on" : ""}`}
+                  onClick={() => setLooseGst("nongst")}
+                >
+                  Non-GST <span className="cl-seg__n">{nonGstList.length}</span>
+                </button>
+              </div>
+              <div className="cl-fgrp cl-inv-search">
+                <i className="bi bi-search cl-ficon"></i>
+                <input
+                  className="cl-finput cl-finput--icon"
+                  type="text"
+                  placeholder="Search invoice no, name, product…"
+                  value={looseSearch}
+                  onChange={(e) => setLooseSearch(e.target.value)}
+                />
+              </div>
+            </div>
+            {looseLoading ? (
+              <div className="cl-loading">
+                <div className="cl-spinner"></div>
+                <span>Loading invoices…</span>
+              </div>
+            ) : (
+              <div className="cl-table-wrap">
+                <table className="cl-table cl-inv-table">
+                  <thead>
+                    <tr>
+                      <th>Invoice No</th>
+                      <th>Date</th>
+                      <th>Products</th>
+                      <th>Qty</th>
+                      <th>Amount</th>
+                      {showGst && <th>GST</th>}
+                      <th>Paid</th>
+                      <th>Outstanding</th>
+                      <th>Payment</th>
+                      <th>Branch</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {list.length > 0 ? (
+                      list.map((inv) => (
+                        <tr
+                          key={inv.id}
+                          className="cl-tr"
+                          style={{ cursor: "pointer" }}
+                          title="Open invoice"
+                          onClick={() => handleViewInvoice(inv.invoice_no)}
+                        >
+                          <td>
+                            <span className="cl-tag cl-tag--neutral">{inv.invoice_no}</span>
+                            {inv.buyer_name && <div className="cl-inv-muted">{inv.buyer_name}</div>}
+                          </td>
+                          <td><span className="cl-date">{inv.invoice_date}</span></td>
+                          <td>
+                            <div
+                              className="cl-inv-prod"
+                              title={(inv.items || []).map((it) => `${it.description} × ${Number(it.qty)}`).join(", ")}
+                            >
+                              {(inv.items || []).map((it) => `${it.description} × ${Number(it.qty)}`).join(", ") || "—"}
+                            </div>
+                          </td>
+                          <td>{(inv.items || []).reduce((s, it) => s + Number(it.qty || 0), 0)}</td>
+                          <td><span className="cl-amount">{inr(inv.net_amount)}</span></td>
+                          {showGst && (
+                            <td>
+                              <div className="cl-gst">
+                                <span className="cl-gst__pill">GST {Number(inv.gst_rate)}%</span>
+                                <span className="cl-gst__tax">Tax {inr(inv.total_tax)}</span>
+                              </div>
+                              <div className="cl-gst__det">
+                                Taxable {inr(inv.subtotal)} · {inv.gst_type === "igst" ? `IGST ${inr(inv.total_tax)}` : `CGST ${inr(inv.cgst_amount)} · SGST ${inr(inv.sgst_amount)}`}
+                              </div>
+                            </td>
+                          )}
+                          <td>{inr(inv.paid_amount)}</td>
+                          <td>
+                            <span className={Number(inv.outstanding) > 0 ? "cl-amount cl-amount--red" : "cl-amount cl-amount--green"}>
+                              {inr(inv.outstanding)}
+                            </span>
+                          </td>
+                          <td>{inv.payment_mode || "—"}</td>
+                          <td>{inv.branch_id ? branchLabel(inv.branch_id) : "All Branch"}</td>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <div className="cl-actions">
+                              <button
+                                className="cl-btn cl-btn--tiny cl-btn--ghost"
+                                onClick={() => handleViewInvoice(inv.invoice_no)}
+                                disabled={viewLoading}
+                              >
+                                {viewLoading ? "…" : "👁 View"}
+                              </button>
+                              <button
+                                className="cl-btn cl-btn--tiny cl-btn--ghost"
+                                title="Open this bill to change items / amounts / payment, then save again"
+                                onClick={() => navigate("/tax-invoice", { state: { continueInvoiceNo: inv.invoice_no } })}
+                              >
+                                ✏️ Edit
+                              </button>
+                              <button
+                                className="cl-btn cl-btn--tiny cl-btn--ghost"
+                                title="Statement of this invoice"
+                                onClick={() => navigate(`/statements?type=sales&invoice_no=${encodeURIComponent(inv.invoice_no)}`)}
+                              >
+                                📒 Statement
+                              </button>
+                              <button
+                                className="cl-btn cl-btn--tiny cl-btn--ghost"
+                                style={{ color: "#dc2626" }}
+                                onClick={async () => {
+                                  if (!window.confirm(`Delete bill ${inv.invoice_no} (${inr(inv.net_amount)})?\nStock will NOT be added back automatically.`)) return;
+                                  try {
+                                    const res = await apiFetch(`/client.php?invoice_id=${inv.id}`, { method: "DELETE" });
+                                    const d = await res.json();
+                                    if (!d.success) throw new Error(d.message || "Delete failed");
+                                    showToast(`Bill ${inv.invoice_no} deleted`);
+                                    fetchLooseInvoices();
+                                  } catch (err) {
+                                    showToast(err.message, "error");
+                                  }
+                                }}
+                              >
+                                🗑 Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={showGst ? 11 : 10}>
+                          <div className="cl-empty">
+                            <i className="bi bi-inbox"></i>
+                            <p>No {showGst ? "GST" : "Non-GST"} invoices without a customer</p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* QUOTATIONS TAB */}
       {pageView === "quotations" && (
@@ -2125,7 +2555,7 @@ export default function Clients() {
               <input
                 className="cl-finput cl-finput--icon"
                 type="text"
-                placeholder="Search name, phone, GST…"
+                placeholder="Search name, phone, GST, vehicle no…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -2142,6 +2572,35 @@ export default function Clients() {
             </select>
           </div>
 
+          {trips.length > 0 && (
+            <div className="cl-table-wrap" style={{ marginBottom: 16 }}>
+              <div style={{ padding: "10px 14px", fontWeight: 700 }}>
+                🚚 Vehicle Trips — {search.toUpperCase()} ({trips.length})
+              </div>
+              <table className="cl-table">
+                <thead>
+                  <tr>
+                    <th>Date</th><th>Bill No</th><th>Vehicle</th><th>Customer</th><th>Ship To / Destination</th><th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trips.map((t) => (
+                    <tr key={t.id} style={{ cursor: "pointer" }} onClick={() => handleViewInvoice(t.invoice_no)} title="Open bill">
+                      <td>{t.invoice_date}</td>
+                      <td><b>{t.invoice_no}</b></td>
+                      <td>{t.motor_vehicle_no}</td>
+                      <td>{t.buyer_name || "—"}</td>
+                      <td>
+                        {[t.consignee_name, t.consignee_address, t.destination].filter(Boolean).join(", ") || "—"}
+                      </td>
+                      <td>{inr(t.net_amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {loading ? (
             <div className="cl-loading">
               <div className="cl-spinner"></div>
@@ -2153,12 +2612,10 @@ export default function Clients() {
                 <thead>
                   <tr>
                     <th>Customer</th>
-                    <th>Phone</th>
-                    <th>Status</th>
-                    <th>Billed</th>
-                    <th>Paid</th>
-                    <th>Purchases</th>
                     <th>Net Balance</th>
+                    <th>Received</th>
+                    <th>WhatsApp</th>
+                    <th>Purchases</th>
                     {isAdmin && <th>Actions</th>}
                   </tr>
                 </thead>
@@ -2190,19 +2647,15 @@ export default function Clients() {
                             </div>
                           </td>
                           <td>
-                            <span className="cl-phone">
-                              {client.phone || "—"}
-                            </span>
-                          </td>
-                          <td>
-                            <span className={`cl-tag ${status.cls}`}>
-                              {status.label}
-                            </span>
-                          </td>
-                          <td>
-                            <span className="cl-amount">
-                              {inr(client.total_billed)}
-                            </span>
+                            {(() => {
+                              const b = balanceView(client.net_balance, client.total_purchased);
+                              const green = b.weOwe && !(Number(client.total_purchased) > 0);
+                              return (
+                                <span className={`cl-amount ${green ? "cl-amount--green" : "cl-amount--red"}`} title={b.label}>
+                                  {inr(b.amount)}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td>
                             <span className="cl-amount cl-amount--green">
@@ -2210,41 +2663,22 @@ export default function Clients() {
                             </span>
                           </td>
                           <td>
+                            <button
+                              className="cl-act"
+                              style={{ background: "#dcfce7", color: "#15803d" }}
+                              title="Send full statement on WhatsApp"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                sendStatementWA(client);
+                              }}
+                            >
+                              <i className="bi bi-whatsapp"></i>
+                            </button>
+                          </td>
+                          <td>
                             <span className="cl-amount">
                               {inr(client.total_purchased || 0)}
                             </span>
-                            {client.is_dual_party && (
-                              <span
-                                className="cl-tag cl-tag--neutral"
-                                style={{ marginLeft: 6 }}
-                              >
-                                Both
-                              </span>
-                            )}
-                          </td>
-                          <td>
-                            {(() => {
-                              const b = balanceView(client.net_balance, client.total_purchased);
-                              return (
-                                <span
-                                  className="cl-amount cl-amount--red"
-                                  title={b.label}
-                                >
-                                  {b.weOwe && (
-                                    <small
-                                      style={{
-                                        display: "block",
-                                        fontWeight: 600,
-                                        fontSize: 11,
-                                      }}
-                                    >
-                                      {b.label}
-                                    </small>
-                                  )}
-                                  {inr(b.amount)}
-                                </span>
-                              );
-                            })()}
                           </td>
                           {isAdmin && (
                             <td>
@@ -2274,7 +2708,7 @@ export default function Clients() {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={isAdmin ? 7 : 6}>
+                      <td colSpan={isAdmin ? 6 : 5}>
                         <div className="cl-empty">
                           <i className="bi bi-inbox"></i>
                           <p>No customers found</p>
@@ -2496,7 +2930,7 @@ export default function Clients() {
 
                   <button
                     className="cl-btn cl-btn--primary cl-btn--block"
-                    onClick={() => setShowPayModal(true)}
+                    onClick={() => { setPayForm((p) => ({ ...p, invoice_id: "", invoice_no: "" })); setShowPayModal(true); }}
                   >
                     <i className="bi bi-plus-circle"></i> Recieve Payment
                   </button>
@@ -2627,10 +3061,34 @@ export default function Clients() {
                       <div>
                         <p className="cl-list-item__title">{inv.invoice_no}</p>
                         <p className="cl-list-item__sub">{inv.invoice_date}</p>
+                        {inv.motor_vehicle_no && (
+                          <p className="cl-list-item__sub">🚚 {inv.motor_vehicle_no}</p>
+                        )}
                         {inv.payment_mode && (
                           <span className="cl-tag cl-tag--neutral">
                             {inv.payment_mode}
                           </span>
+                        )}
+                        {inv.payment_status && (
+                          <>
+                            {" "}
+                            <span
+                              className={`cl-tag ${inv.payment_status === "Fully Paid" ? "cl-tag--paid" : inv.payment_status === "Unpaid" ? "cl-tag--unpaid" : "cl-tag--neutral"}`}
+                            >
+                              {inv.payment_status}
+                            </span>
+                            <p className="cl-list-item__sub">
+                              Paid {inr(inv.paid_total)}
+                              {Number(inv.balance_due) > 0 && <> · Remaining <b>{inr(inv.balance_due)}</b></>}
+                            </p>
+                            {(clientDetail.payments || [])
+                              .filter((pay) => Number(pay.invoice_id) === Number(inv.id) && Number(pay.amount) > 0)
+                              .map((pay) => (
+                                <p key={pay.id} className="cl-list-item__sub">
+                                  💰 {pay.payment_date} · {inr(pay.amount)} · {pay.payment_mode || String(pay.note || "").split("·")[0].trim() || "—"}
+                                </p>
+                              ))}
+                          </>
                         )}
                       </div>
                       <div className="cl-list-item__right">
@@ -2638,6 +3096,24 @@ export default function Clients() {
                           {inr(inv.net_amount)}
                         </p>
                         <div className="cl-actions">
+                          {Number(inv.balance_due) > 0 && (
+                            <button
+                              className="cl-btn cl-btn--tiny cl-btn--ghost"
+                              title="Record a payment against this invoice"
+                              onClick={() => {
+                                setPayForm({
+                                  amount: String(inv.balance_due),
+                                  payment_date: new Date().toISOString().slice(0, 10),
+                                  note: "Cash",
+                                  invoice_id: inv.id,
+                                  invoice_no: inv.invoice_no,
+                                });
+                                setShowPayModal(true);
+                              }}
+                            >
+                              💰 Add Payment
+                            </button>
+                          )}
                           <button
                             className="cl-btn cl-btn--tiny cl-btn--ghost"
                             title="Statement of this invoice"
@@ -2729,7 +3205,13 @@ export default function Clients() {
                         {pay.note && (
                           <p className="cl-list-item__sub">{pay.note}</p>
                         )}
+                        {pay.invoice_id && !pay.from_invoice && (
+                          <p className="cl-list-item__sub">
+                            Invoice {(clientDetail.invoices || []).find((x) => Number(x.id) === Number(pay.invoice_id))?.invoice_no || `#${pay.invoice_id}`}
+                          </p>
+                        )}
                       </div>
+                      {!pay.from_invoice && (<>
                       <button
                         className="cl-btn cl-btn--ghost"
                         title="Edit this entry"
@@ -2777,11 +3259,12 @@ export default function Clients() {
                       >
                         <i className="bi bi-trash"></i>
                       </button>
+                      </>)}
                     </div>
                   ))}
                   <button
                     className="cl-btn cl-btn--primary cl-btn--block"
-                    onClick={() => setShowPayModal(true)}
+                    onClick={() => { setPayForm((p) => ({ ...p, invoice_id: "", invoice_no: "" })); setShowPayModal(true); }}
                   >
                     <i className="bi bi-plus-circle"></i> Add Payment
                   </button>
@@ -3084,12 +3567,19 @@ export default function Clients() {
                 >
                   <option value="GPay">GPay</option>
                   <option value="Cash">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
                   <option value="Cheque">Cheque</option>
                   <option value="Advance · GPay">Advance — GPay</option>
                   <option value="Advance · Cash">Advance — Cash</option>
                   <option value="Advance · Cheque">Advance — Cheque</option>
                 </select>
               </div>
+              {payForm.invoice_id && (
+                <div className="cl-note-box">
+                  Payment against invoice <b>{payForm.invoice_no}</b>
+                </div>
+              )}
               <div className="cl-note-box">
                 Payment for: <b>{selected?.name}</b>
                 {clientDetail && (
@@ -3309,6 +3799,12 @@ export default function Clients() {
           width: 0;
           height: 0;
         }
+        /* Show scrollbars where content scrolls (table sideways, invoice view down) */
+        .cl-table-wrap, .cl-tabs, .inv-view-scroll { scrollbar-width: thin; scrollbar-color: #94a3b8 #f1f5f9; -webkit-overflow-scrolling: touch; }
+        .cl-table-wrap::-webkit-scrollbar, .cl-tabs::-webkit-scrollbar, .inv-view-scroll::-webkit-scrollbar { display: block; width: 10px; height: 10px; }
+        .cl-table-wrap::-webkit-scrollbar-track, .cl-tabs::-webkit-scrollbar-track, .inv-view-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
+        .cl-table-wrap::-webkit-scrollbar-thumb, .cl-tabs::-webkit-scrollbar-thumb, .inv-view-scroll::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 8px; }
+        .cl-table-wrap::-webkit-scrollbar-thumb:hover, .inv-view-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
 
         .cl-root { width: 100%; max-width: 100%; min-width: 0; color: #0f172a; position: relative; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; min-height: 100vh; box-sizing: border-box; }
 
@@ -3463,7 +3959,7 @@ export default function Clients() {
         .cl-note-box { background: #f8fafc; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 
         /* Modal */
-        .cl-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.55); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: cl-fi .18s ease; padding: 16px; }
+        .cl-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: cl-fi .18s ease; padding: 16px; }
         @keyframes cl-fi { from { opacity: 0; } to { opacity: 1; } }
         .cl-modal { background: #fff; border-radius: 16px; width: 480px; max-width: 92vw; max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(15,23,42,.22); animation: cl-mi .22s cubic-bezier(.4,0,.2,1); }
         .cl-modal--sm { width: 380px; }
@@ -3481,6 +3977,29 @@ export default function Clients() {
         .cl-modal__confirm-icon { width: 56px; height: 56px; border-radius: 50%; background: #fef2f2; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; font-size: 24px; color: #dc2626; }
         .cl-modal__confirm-title { margin: 0 0 6px; font-weight: 700; font-size: 16px; color: #0f172a; }
         .cl-modal__confirm-sub { margin: 0; font-size: 13px; color: #64748b; }
+
+        /* Invoices (no customer) — compact layout */
+        .cl-card__head { color: #0f172a; }
+        .cl-inv-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+        .cl-inv-search { flex: 1; min-width: 200px; max-width: 360px; }
+        .cl-seg { display: inline-flex; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 9px; padding: 3px; gap: 2px; flex-shrink: 0; }
+        .cl-seg__btn { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: #64748b; font-size: 12.5px; font-weight: 700; padding: 6px 14px; border-radius: 7px; cursor: pointer; white-space: nowrap; line-height: 1.2; transition: background .15s, color .15s; }
+        .cl-seg__btn:hover { color: #0f172a; }
+        .cl-seg__btn--on { background: #fff; color: #008b3e; box-shadow: 0 1px 3px rgba(15,23,42,.12); }
+        .cl-seg__n { font-size: 11px; font-weight: 700; background: #e2e8f0; color: #475569; padding: 0 7px; border-radius: 10px; line-height: 1.6; }
+        .cl-seg__btn--on .cl-seg__n { background: #dcfce7; color: #15803d; }
+        .cl-inv-table { font-size: 12.5px; }
+        .cl-inv-table th { padding: 9px 10px; font-size: 10.5px; }
+        .cl-inv-table td { padding: 9px 10px; white-space: nowrap; font-size: 12.5px; vertical-align: middle; }
+        .cl-inv-table .cl-tag { font-size: 12px; padding: 2px 8px; }
+        .cl-inv-muted { font-size: 11px; color: #64748b; margin-top: 2px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+        .cl-inv-prod { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; }
+        .cl-gst { display: flex; align-items: center; gap: 8px; }
+        .cl-gst__pill { font-size: 11px; font-weight: 700; color: #15803d; background: #dcfce7; border-radius: 6px; padding: 1px 7px; }
+        .cl-gst__tax { font-size: 12px; font-weight: 600; color: #1e293b; }
+        .cl-gst__det { font-size: 10.5px; color: #64748b; margin-top: 3px; }
+        .cl-inv-table .cl-actions { display: flex; flex-wrap: nowrap; gap: 4px; }
+        .cl-inv-table .cl-btn--tiny { padding: 4px 8px; font-size: 11.5px; white-space: nowrap; }
 
         /* Responsive */
         @media (max-width: 1100px) {
@@ -3502,6 +4021,10 @@ export default function Clients() {
           .cl-quick-actions { grid-template-columns: 1fr; }
           .cl-detail__info h3 { font-size: 15px; }
           .cl-modal { width: 100%; }
+          .cl-inv-bar { flex-direction: column; align-items: stretch; }
+          .cl-inv-search { max-width: none; min-width: 0; }
+          .cl-seg { align-self: flex-start; }
+          .cl-inv-table { min-width: 960px; }
         }
 
         @media (max-width: 480px) {

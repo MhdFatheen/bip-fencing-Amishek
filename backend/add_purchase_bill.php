@@ -64,14 +64,15 @@ $subtotal   = 0.0;
 $cleanItems = [];
 
 foreach ($items as $idx => $item) {
-    $pid   = trim($item['product_id'] ?? '');
+    $pid   = trim($item['product_id'] ?? '');   // internal id (only sent when editing / old clients)
+    $hsn   = array_key_exists('hsn', $item) ? trim((string)$item['hsn']) : $pid; // old clients: the typed code was the HSN
     $pname = trim($item['product_name'] ?? '');
     $qty   = (float)($item['quantity'] ?? 0);
     $rate  = (float)($item['rate'] ?? 0);
 
-    if ($pid === '' || $pname === '' || $qty <= 0 || $rate < 0) {
+    if ($pname === '' || $qty <= 0 || $rate < 0) {
         http_response_code(400);
-        echo json_encode(['message' => "Item #" . ($idx + 1) . ": product ID, name and valid quantity/rate are required"]);
+        echo json_encode(['message' => "Item #" . ($idx + 1) . ": product name and valid quantity/rate are required"]);
         exit;
     }
 
@@ -79,7 +80,9 @@ foreach ($items as $idx => $item) {
     $subtotal += $amount;
 
     $cleanItems[] = [
+        'item_raw'     => $item,
         'product_id'   => $pid,
+        'hsn'          => $hsn,
         'product_name' => $pname,
         'quantity'     => $qty,
         'rate'         => $rate,
@@ -101,6 +104,13 @@ $total_amount = round($subtotal + $gst_amount + $round_off + $opening_balance, 2
 $conn = getDB();
 pbEnsureRoundOffColumns($conn);
 pbEnsureNullableBranch($conn);
+pbEnsureHsnColumns($conn);
+pbEnsureGstTypeColumn($conn);
+$gst_type = (($data['gst_type'] ?? '') === 'igst') ? 'igst' : 'cgst_sgst';
+// each product row can go to All Branch (NULL) or one chosen branch
+foreach ($cleanItems as $k => $ci) {
+    $cleanItems[$k]['branch'] = pbItemBranch($conn, $ci['item_raw'], $authUser, $branchId);
+}
 $conn->begin_transaction();
 
 try {
@@ -122,12 +132,16 @@ try {
     );
     $stmt->execute();
     $billId = (int)$conn->insert_id;
+    $gtS = $conn->prepare("UPDATE purchase_bills SET gst_type = ? WHERE id = ?");
+    $gtS->bind_param('si', $gst_type, $billId);
+    $gtS->execute();
+    $gtS->close();
     $stmt->close();
 
     $itemStmt = $conn->prepare(
         "INSERT INTO purchase_bill_items
-            (purchase_bill_id, product_id, product_name, quantity, rate, amount, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
+            (purchase_bill_id, product_id, product_name, quantity, rate, amount, branch_id, hsn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))"
     );
 
     $stockSelectStmt = $conn->prepare(
@@ -139,36 +153,40 @@ try {
             SET total_purchased = total_purchased + ?,
                 current_stock    = current_stock + ?,
                 rate             = ?,
-                product_name     = ?
+                product_name     = IF(COALESCE(product_name,'') = '', ?, product_name),
+                hsn              = IF(? <> '', ?, hsn)
           WHERE product_id = ? AND branch_id <=> ?"
     );
 
     $stockInsertStmt = $conn->prepare(
         "INSERT INTO purchase_stock
-            (product_id, product_name, total_purchased, current_stock, rate, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?)"
+            (product_id, product_name, hsn, total_purchased, current_stock, rate, branch_id)
+         VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?)"
     );
 
     foreach ($cleanItems as $item) {
         $pname  = $item['product_name'];
         // same code but different product name = a different product (see purchase_common.php)
-        $pid    = pbResolveProductId($conn, $item['product_id'], $pname);
+        $hsn    = $item['hsn'];
+        $pid    = pbPickProductId($conn, $item['product_id'], $pname, $hsn);
+        $pname  = pbCanonicalName($conn, $pid, $pname);   // existing product → its own spelling
         $qty    = $item['quantity'];
         $rate   = $item['rate'];
         $amount = $item['amount'];
 
-        $itemStmt->bind_param('issdddi', $billId, $pid, $pname, $qty, $rate, $amount, $branchId);
+        $ib     = $item['branch'];
+        $itemStmt->bind_param('issdddis', $billId, $pid, $pname, $qty, $rate, $amount, $ib, $hsn);
         $itemStmt->execute();
 
-        $stockSelectStmt->bind_param('si', $pid, $branchId);
+        $stockSelectStmt->bind_param('si', $pid, $ib);
         $stockSelectStmt->execute();
         $stockRow = $stockSelectStmt->get_result()->fetch_assoc();
 
         if ($stockRow) {
-            $stockUpdateStmt->bind_param('dddssi', $qty, $qty, $rate, $pname, $pid, $branchId);
+            $stockUpdateStmt->bind_param('dddssssi', $qty, $qty, $rate, $pname, $hsn, $hsn, $pid, $ib);
             $stockUpdateStmt->execute();
         } else {
-            $stockInsertStmt->bind_param('ssdddi', $pid, $pname, $qty, $qty, $rate, $branchId);
+            $stockInsertStmt->bind_param('sssdddi', $pid, $pname, $hsn, $qty, $qty, $rate, $ib);
             $stockInsertStmt->execute();
         }
     }

@@ -520,7 +520,7 @@ export default function PurchaseInventory() {
                   <i className="bi bi-building"></i>
                   <div>
                     Viewing all branches. Select a specific branch from the
-                    topbar (Kadambankulam, Nanguneri or Kadambankulam) to deduct stock.
+                    topbar (Kadambankulam, Fencing Group or Panagudi) to deduct stock.
                   </div>
                 </div>
               )}
@@ -685,7 +685,7 @@ export default function PurchaseInventory() {
                         </div>
                         <div className="at-bubble-body">
                           <div className="at-bubble-stat">
-                            <b>Product ID</b>
+                            <b>HSN Code</b>
                             {p.product_id}
                           </div>
                           {isAdmin && (
@@ -871,7 +871,7 @@ export default function PurchaseInventory() {
                         {h.deducted_at}
                       </div>
                       <div className="at-bubble-stat">
-                        <b>Product ID</b>
+                        <b>HSN code</b>
                         {h.product_id}
                       </div>
                       <div className="at-bubble-stat">

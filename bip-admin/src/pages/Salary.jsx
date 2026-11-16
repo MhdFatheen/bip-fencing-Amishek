@@ -1,10 +1,11 @@
-import SalaryOld from "./SalaryOld";
+import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import SalaryBranchC from "./SalaryBranchC";
 
-// Branch A (id 1 = Vallioor): pack / kambi kattu / others entry page
+// Branch A (id 1 = Kadambankulam): pack / kambi kattu / others entry page
 // Branch C (id 3 = Panagudi): pack / loading / unloading / location entry page
-// Branch B (id 2 = Nanguneri): attendance / work yes-no amount / extra entry page
-// "All Branches" keeps the original salary page.
+// Branch B (id 2 = Fencing Group): attendance / work yes-no amount / extra entry page
+// "All Branches" → every employee listed; tap one to enter salary in their branch.
 
 const currentBranchId = () => {
   if (localStorage.getItem("role") === "admin") {
@@ -18,9 +19,12 @@ const currentBranchId = () => {
 };
 
 export default function Salary() {
-  const b = currentBranchId();
+  const location = useLocation();
+  // Opened from Employee page "Statement" → stay on that employee's branch page
+  const [stmtBranch] = useState(() => location.state?.stmtBranch);
+  const b = stmtBranch ? String(stmtBranch) : currentBranchId();
   if (b === "1") return <SalaryBranchC variant="A" />;
   if (b === "2") return <SalaryBranchC variant="B" />;
   if (b === "3") return <SalaryBranchC variant="C" />;
-  return <SalaryOld />;
+  return <SalaryBranchC all />;
 }

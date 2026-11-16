@@ -20,11 +20,11 @@ function jsonFail(string $msg, int $code = 400): void {
 
 // Branch name -> branches.id
 // Must match the ids the frontend uses (utils/branchNames.js / topbar X-Branch-ID)
-const BRANCH_IDS = ['vallioor' => 1, 'kadambankulam' => 1, 'nanguneri' => 2, 'panagudi' => 3];
+const BRANCH_IDS = ['kadambankulam' => 1, 'vallioor' => 1, 'fencing group' => 2, 'nanguneri' => 2, 'panagudi' => 3];
 
 function resolveBranchId(mysqli $db, string $name): int {
     $key = strtolower(trim($name));
-    if (!isset(BRANCH_IDS[$key])) jsonFail('Branch must be Vallioor, Kadambankulam, Panagudi or Nanguneri', 422);
+    if (!isset(BRANCH_IDS[$key])) jsonFail('Branch must be Kadambankulam, Panagudi or Fencing Group', 422);
     return BRANCH_IDS[$key];
 }
 
@@ -55,6 +55,7 @@ function employeeData(mysqli $db, array $body, array $cols, bool $isNew): array 
         'price_per_bags'   => $num('price_per_bags'),
         'petrol_allowance' => $num('petrol_allowance') ?? 0,
         'tea_allowance'    => $num('tea_allowance') ?? 0,
+        'extra_rate'       => $num('extra_rate') ?? 0,
         'loading_rate'         => $num('loading_rate') ?? 0,
         'unloading_rate'       => $num('unloading_rate') ?? 0,
         'location_change_rate' => $num('location_change_rate') ?? 0,

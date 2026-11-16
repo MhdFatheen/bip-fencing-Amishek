@@ -167,7 +167,6 @@ case 'products':
         "SELECT DISTINCT product_name AS n FROM purchase_stock",
         "SELECT DISTINCT product_name AS n FROM products",
         "SELECT DISTINCT product_name AS n FROM purchase_bill_items",
-        "SELECT DISTINCT product_name AS n FROM purchase_products",
     ] as $sql) {
         foreach (st_query($conn, $sql) as $r) {
             $n = trim((string) $r['n']);
@@ -527,8 +526,8 @@ case 'inventory':
     // Exact record: resolve the product by its unique ID (src = product | purchase)
     $pid = (int) ($_GET['product_id'] ?? 0);
     if ($type === 'product' && $pid > 0) {
-        $tbl = (($_GET['src'] ?? '') === 'purchase') ? 'purchase_products' : 'products';
-        if (st_table_exists($conn, $tbl)) {
+        $tbl = 'products';
+        if (($_GET['src'] ?? '') !== 'purchase' && st_table_exists($conn, $tbl)) {
             $rr = st_query($conn, "SELECT product_name FROM `$tbl` WHERE id = ? LIMIT 1", 'i', [$pid]);
             if ($rr && trim((string) $rr[0]['product_name']) !== '') $prodName = trim((string) $rr[0]['product_name']);
         }
@@ -577,18 +576,6 @@ case 'inventory':
             $r['invoice_no'] !== '' ? $r['invoice_no'] : 'PB-' . $r['id'], $r['quantity'], 0, $r['company_name'], 1, $r['branch_id'], $r['rate']);
     }
 
-    // Stock IN — Purchase Catalog (Add Purchase / manual stock-in on the Purchase Catalog)
-    if (st_table_exists($conn, 'purchase_product_log')) {
-        [$bSql, $bT, $bP] = st_branch_sql($branch_id, 'branch_id');
-        foreach (st_query($conn,
-            "SELECT id, product_name, qty, rate, branch_id, supplier, reference, note, logged_at
-               FROM purchase_product_log WHERE log_type = 'stock_in' $bSql ORDER BY logged_at", $bT, $bP) as $r) {
-            $add($r['product_name'], $r['logged_at'],
-                $r['note'] === 'Manual Stock In' ? 'Stock In (Purchase Catalog)' : 'Purchase (Purchase Catalog)',
-                $r['reference'] !== '' ? $r['reference'] : 'PC-' . $r['id'], $r['qty'], 0,
-                $r['supplier'], 1, $r['branch_id'], $r['rate']);
-        }
-    }
     // Stock OUT — tax invoices (item description = product name)
     [$bSql, $bT, $bP] = st_branch_sql($branch_id, 'i.branch_id');
     foreach (st_query($conn,
@@ -614,16 +601,6 @@ case 'inventory':
         }
     }
 
-    // Stock OUT — Purchase Catalog damage
-    if (st_table_exists($conn, 'purchase_product_damage') && st_table_exists($conn, 'purchase_products')) {
-        [$bSql, $bT, $bP] = st_branch_sql($branch_id, 'd.branch_id');
-        foreach (st_query($conn,
-            "SELECT d.id, d.qty, d.damage_date, d.branch_id, p.product_name
-               FROM purchase_product_damage d JOIN purchase_products p ON p.id = d.product_id WHERE 1=1 $bSql", $bT, $bP) as $r) {
-            $add($r['product_name'], $r['damage_date'], 'Damage', 'PDMG' . str_pad($r['id'], 3, '0', STR_PAD_LEFT), 0, $r['qty'], '', 3, $r['branch_id']);
-        }
-    }
-
     // Current stock as the app shows it today
     $current = [];
     [$bSql, $bT, $bP] = st_branch_sql($branch_id, 'branch_id');
@@ -632,14 +609,6 @@ case 'inventory':
     }
     foreach (st_query($conn, "SELECT product_name, SUM(stock_qty) AS s FROM products WHERE 1=1 $bSql GROUP BY product_name", $bT, $bP) as $r) {
         $current[strtolower(trim($r['product_name']))]['product_stock'] = round((float) $r['s'], 2);
-    }
-
-    // Purchase Catalog stock (names are never shared with the Product Catalog)
-    if (st_table_exists($conn, 'purchase_products')) {
-        foreach (st_query($conn, "SELECT product_name, SUM(stock_qty) AS s FROM purchase_products WHERE 1=1 $bSql GROUP BY product_name", $bT, $bP) as $r) {
-            $k = strtolower(trim($r['product_name']));
-            $current[$k]['product_stock'] = round(($current[$k]['product_stock'] ?? 0) + (float) $r['s'], 2);
-        }
     }
 
     // Running balance per product
